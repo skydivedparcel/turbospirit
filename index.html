@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Chadwell Heath – Free-Roam 3D Drive</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -165,6 +166,52 @@ body { background: #000; min-height: 100vh; display: flex; flex-direction: colum
 #jed-canvas.panning { cursor:grabbing; }
 #jed-legend { width:1000px; font-size:11px; color:#777; line-height:1.6; }
 #jed-legend b { color:#0a0; }
+
+/* ── Phone / tablet layout (Session 24) ───────────────────────────────────
+   body.touch is set at start-up on touch devices. Desktop is untouched.
+   Portrait: game on top, minimap below it, driving controls at the bottom.
+   Landscape: game fills the height, controls float over the corners. */
+body.touch { justify-content:flex-start; gap:0; -webkit-tap-highlight-color:transparent; }
+body.touch.driving { overflow:hidden; overscroll-behavior:none; touch-action:none; height:100vh; height:100dvh; }
+body.touch #title, body.touch #menu, body.touch #opts, body.touch #status { width:100vw; }
+body.touch #title-canvas, body.touch #city-canvas, body.touch #opts-canvas { width:100vw; height:75vw; }
+body.touch #game { width:100vw; gap:0; }
+body.touch #stage { flex-direction:column; align-items:center; gap:4px; }
+body.touch #c { width:100vw; height:75vw; }
+body.touch #map {
+    width:auto; max-width:100vw;
+    height:calc(100vh - 75vw - 160px); height:calc(100dvh - 75vw - 160px);
+    border:none; object-fit:contain;   /* keep the map's shape when it's squeezed */
+}
+@media (orientation: landscape){
+    body.touch #title-canvas, body.touch #city-canvas, body.touch #opts-canvas,
+    body.touch #c { width:auto; height:100vh; height:100dvh; }
+    body.touch #map { display:none; }
+    body.touch #tpad { background:transparent; border-top:none; }
+}
+#tpad {
+    display:none; position:fixed; left:0; right:0; bottom:0; z-index:9000;
+    height:150px; padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+    background:#000; border-top:2px solid #00C000;
+    justify-content:space-between; align-items:flex-end;
+    touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
+}
+#tpad.on { display:flex; }
+#tpad .grp { display:flex; gap:10px; align-items:flex-end; }
+.tp {
+    width:84px; height:118px; border:3px solid #00C000; background:#000; color:#00C000;
+    font:bold 13px monospace; letter-spacing:1px; display:flex; align-items:center;
+    justify-content:center; text-align:center; touch-action:none;
+}
+.tp.hb   { width:112px; border-color:#C00000; color:#C00000; }
+.tp.down { background:#00C000; color:#000; }
+.tp.hb.down { background:#C00000; color:#000; }
+#tp-menu {
+    align-self:flex-start; width:64px; height:34px; border:2px solid #00C0C0; background:#000;
+    color:#00C0C0; font:bold 11px monospace; letter-spacing:1px;
+}
+#tp-tilt { position:fixed; top:6px; left:6px; z-index:9001; display:none;
+    font:bold 11px monospace; color:#000; background:#C0C000; padding:4px 6px; }
 </style>
 </head>
 <body>
@@ -234,6 +281,17 @@ body { background: #000; min-height: 100vh; display: flex; flex-direction: colum
 <button id="back"     style="display:none"></button>
 <button id="back-map" style="display:none"></button>
 </div>
+
+<!-- ── Phone driving controls (Session 24): shown only on touch devices while driving ── -->
+<div id="tpad">
+    <div class="grp">
+        <div class="tp" id="tp-brake">BRAKE</div>
+        <div class="tp" id="tp-accel">ACCEL</div>
+    </div>
+    <button id="tp-menu">MENU</button>
+    <div class="tp hb" id="tp-hb">HAND<br>BRAKE</div>
+</div>
+<div id="tp-tilt">TILT OFF &middot; TAP TO ENABLE</div>
 
 <!-- ── Options screen: Spectrum-style, opened with Start / Esc ── -->
 <div id="opts">
@@ -1324,6 +1382,7 @@ function updateCar(){
     if(keys['shift'])                 INPUT.handbrake = true;  // keyboard handbrake
     if(keys[' '])                     INPUT.reset = true;
     readGamepad();
+    readTouchControls();   // phone: on-screen pedals + tilt steering
 
     // ── reset (Space / Start) — snap back to spawn, clear all motion ──
     if(INPUT.reset){
@@ -6933,6 +6992,113 @@ function optsPadPoll(){
     requestAnimationFrame(optsPadPoll);
 }
 requestAnimationFrame(optsPadPoll);
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PHONE CONTROLS (Session 24): tilt steering + on-screen pedals
+//  Only active on touch devices (IS_TOUCH). Feeds INPUT the same way the
+//  gamepad does, so the driving model is unchanged.
+//
+//  Tilt: hold the phone upright and turn it like a steering wheel. We rebuild
+//  the gravity direction from the orientation angles (beta, gamma) and measure
+//  how far the SCREEN's left-right axis has dipped. That reads correctly
+//  whether the phone is held upright, leaned back, or turned to landscape,
+//  and needs no calibration: level = straight ahead.
+// ═══════════════════════════════════════════════════════════════════════════
+const TILT = {
+    FULL_DEG: 25,     // tilt for full lock (kept low so the screen doesn't auto-rotate)
+    DEAD_DEG: 3,      // ignore small wobbles around level
+    SMOOTH:   0.35,   // 0..1 low-pass on the raw reading
+    steer: 0, raw: 0, live: false,
+};
+const TOUCH = { accel:false, brake:false, hb:false };
+
+function tiltScreenAngle(){
+    if(screen.orientation && typeof screen.orientation.angle==='number') return screen.orientation.angle;
+    return (typeof window.orientation==='number') ? window.orientation : 0;
+}
+function onTilt(e){
+    if(e.beta==null || e.gamma==null) return;
+    TILT.live = true;
+    const d2r = Math.PI/180, b=e.beta*d2r, g=e.gamma*d2r;
+    // "up" direction expressed in the phone's own x/y axes
+    const ux = -Math.cos(b)*Math.sin(g), uy = Math.sin(b);
+    const a = tiltScreenAngle()*d2r;
+    // screen x-axis in phone axes is (cos a, -sin a); dip of the right edge:
+    const dip = -(ux*Math.cos(a) - uy*Math.sin(a));
+    const deg = Math.asin(Math.max(-1, Math.min(1, dip))) / d2r;
+    let v = 0;
+    if(Math.abs(deg) > TILT.DEAD_DEG)
+        v = Math.sign(deg) * Math.min(1, (Math.abs(deg)-TILT.DEAD_DEG)/(TILT.FULL_DEG-TILT.DEAD_DEG));
+    TILT.raw += (v - TILT.raw) * TILT.SMOOTH;
+    TILT.steer = Math.abs(TILT.raw) < 0.01 ? 0 : TILT.raw;
+}
+
+// iPhone/iPad: tilt data needs permission, asked from inside a tap. Android
+// just starts sending events.
+let TILT_ASKED = false;
+function tiltEnable(){
+    if(TILT_ASKED) return;
+    TILT_ASKED = true;
+    const D = window.DeviceOrientationEvent;
+    if(D && typeof D.requestPermission === 'function'){
+        D.requestPermission().then(r=>{
+            if(r==='granted') window.addEventListener('deviceorientation', onTilt);
+            else TILT_ASKED = false;           // let a later tap offer it again
+        }).catch(()=>{ TILT_ASKED = false; });
+    } else {
+        window.addEventListener('deviceorientation', onTilt);
+    }
+}
+
+function readTouchControls(){
+    if(!IS_TOUCH) return;
+    if(TOUCH.accel) INPUT.throttle = Math.max(INPUT.throttle, 1);
+    if(TOUCH.brake) INPUT.brakeRev = Math.max(INPUT.brakeRev, 1);
+    if(TOUCH.hb)    INPUT.handbrake = true;
+    if(TILT.steer)  INPUT.steer = Math.max(-1, Math.min(1, INPUT.steer + TILT.steer));
+}
+
+if(IS_TOUCH){
+    document.body.classList.add('touch');
+    // first tap anywhere (usually the title screen) asks for tilt
+    document.addEventListener('touchend', tiltEnable, {capture:true});
+    document.addEventListener('click',    tiltEnable, {capture:true});
+
+    // hold-to-press buttons; pointer capture keeps a press alive if the thumb slides
+    const bindHold = (id, key) => {
+        const el = $(id);
+        const on  = e => { e.preventDefault(); TOUCH[key]=true;  el.classList.add('down');
+                           try{ el.setPointerCapture(e.pointerId); }catch(_){} };
+        const off = () => { TOUCH[key]=false; el.classList.remove('down'); };
+        el.addEventListener('pointerdown', on);
+        el.addEventListener('pointerup', off);
+        el.addEventListener('pointercancel', off);
+        el.addEventListener('lostpointercapture', off);
+        el.addEventListener('contextmenu', e=>e.preventDefault());
+    };
+    bindHold('tp-accel','accel');
+    bindHold('tp-brake','brake');
+    bindHold('tp-hb','hb');
+    $('tp-menu').addEventListener('click', ()=>{ TOUCH.accel=TOUCH.brake=TOUCH.hb=false; optsOpen(); });
+    $('tp-tilt').addEventListener('click', ()=>{ TILT_ASKED=false; tiltEnable(); });
+
+    // show the pad only while driving; fit the wide editor screens to the phone
+    const tpad = $('tpad'), tiltNote = $('tp-tilt');
+    const fitWide = () => {
+        const tr = $('trace'), jd = $('jed');
+        if(tr) tr.style.zoom = Math.min(1, window.innerWidth/960);
+        if(jd) jd.style.zoom = Math.min(1, window.innerWidth/1010);
+    };
+    fitWide(); window.addEventListener('resize', fitWide);
+    setInterval(()=>{
+        const driving = MAP_LOADED && gameEl.style.display!=='none';
+        tpad.classList.toggle('on', driving);
+        document.body.classList.toggle('driving', driving);
+        tiltNote.style.display = (driving && !TILT.live) ? 'block' : 'none';
+        if(!driving){ TOUCH.accel=TOUCH.brake=TOUCH.hb=false;
+            for(const b of tpad.querySelectorAll('.tp')) b.classList.remove('down'); }
+    }, 150);
+}
 
 // ── Boot ── title screen first; it hands off to csStartIntro() on the first click.
 titleLoad();
