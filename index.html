@@ -40,6 +40,13 @@ body { background: #000; min-height: 100vh; display: flex; flex-direction: colum
     width: 768px; background: #000; display: none; justify-content: center;
     padding: 0; user-select: none;
 }
+#menu { position: relative; }
+#cs-type-form { position:absolute; left:0; right:0; top:408px; height:24px; margin:0; pointer-events:none; }
+#cs-type {
+    width:100%; height:24px; opacity:0; border:0; padding:0; background:transparent;
+    color:transparent; caret-color:transparent; font-size:16px; /* ≥16px stops iOS zooming in */
+}
+#trace-canvas { touch-action:none; }   /* our pinch/drag, not the browser's page zoom */
 #city-canvas {
     width: 768px; height: 576px; image-rendering: pixelated;
     image-rendering: crisp-edges; cursor: pointer;
@@ -174,6 +181,14 @@ body { background: #000; min-height: 100vh; display: flex; flex-direction: colum
     <canvas id="city-canvas" width="256" height="192"></canvas>
     <!-- hidden plumbing: startBuild() reads placeInput.value; we feed the typed place here -->
     <input id="place" type="text" autocomplete="off" style="position:absolute;left:-9999px;" tabindex="-1">
+    <!-- Real text box laid invisibly over the option-5 line. Focusing it is what
+         makes a phone open its on-screen keyboard (canvas key events never do).
+         Its value is mirrored onto the ZX screen; the form's submit = ENTER. -->
+    <form id="cs-type-form" autocomplete="off" onsubmit="return false;">
+        <input id="cs-type" type="text" inputmode="text" enterkeyhint="go"
+               autocapitalize="characters" autocorrect="off" autocomplete="off"
+               spellcheck="false" maxlength="22" aria-label="Type a place">
+    </form>
     <button id="go" style="display:none"></button>
     <!-- hidden file input for LOAD BUILD on the map screen (verbatim JSON build) -->
     <input id="load-file" type="file" accept="application/json,.json" style="position:absolute;left:-9999px;" tabindex="-1">
@@ -3403,6 +3418,10 @@ const ZXLOAD = (function(){
 const $ = id => document.getElementById(id);
 const menuEl = $('menu'), statusEl = $('status'), gameEl = $('game');
 const placeInput = $('place'), goBtn = $('go');
+// Phone / tablet? (coarse pointer or touch support). Only changes prompts and
+// hint text; every control works the same way on both.
+const IS_TOUCH = (window.matchMedia && matchMedia('(pointer: coarse)').matches) || ('ontouchstart' in window);
+const csTypeEl = $('cs-type'), csTypeForm = $('cs-type-form');
 const loadFileInput = $('load-file');
 // True while the file picker was opened from the city-select option-5 line
 // (typed LOAD ANYWHERE). Lets us restore that screen if the picker is cancelled.
@@ -3492,7 +3511,7 @@ function csPaint(){
     }
     // (option 6 LOAD ANYWHERE relocated to the map screen's LOAD BUILD button)
     if(CS.ready && !CS.custom){
-        zxCentre(cctx, CS_PADSEL===null ? 'ENTER 1 TO 5' : 'UP/DOWN THEN A', ROW_ENTER,CS_BLACK,CS_GREEN);
+        zxCentre(cctx, CS_PADSEL!==null ? 'UP/DOWN THEN A' : (IS_TOUCH ? 'TAP A CITY' : 'ENTER 1 TO 5'), ROW_ENTER,CS_BLACK,CS_GREEN);
     }
 }
 
@@ -3575,9 +3594,30 @@ function csChoose(n){
     } else if(n===5){
         ZXLOAD.prime();
         CS.custom=true; CS.customText=''; CS.ready=false;
+        csTypeEl.value='';
+        csFocusType();            // must run inside the tap/click so a phone shows its keyboard
         csPaint(); csBlinkLoop();
     }
 }
+function csFocusType(){ try { csTypeEl.focus({preventScroll:true}); } catch(e){ csTypeEl.focus(); } }
+// Clean what was typed (phone or desktop) into the ZX character set and mirror it.
+function csTypeSync(){
+    const clean = csTypeEl.value.toUpperCase().replace(/[^A-Z0-9 ,'.\-]/g,'').slice(0,22);
+    if(clean!==csTypeEl.value) csTypeEl.value=clean;
+    CS.customText = clean; csPaint();
+}
+csTypeEl.addEventListener('input', ()=>{ if(CS.custom) csTypeSync(); });
+csTypeEl.addEventListener('keydown', e=>{
+    e.stopPropagation();                       // the text box handles its own keys
+    if(e.key==='Escape'){ e.preventDefault(); csCustomKey({key:'Escape'}); }
+});
+// ENTER / the phone keyboard's GO key submits the form.
+csTypeForm.addEventListener('submit', e=>{
+    e.preventDefault();
+    if(!CS.custom) return;
+    csTypeSync();
+    csCustomKey({key:'Enter'});
+});
 function csBlinkLoop(){
     if(!CS.custom) return;
     CS.blink=(CS.blink+1)%30; csPaint();
@@ -3597,30 +3637,33 @@ function csCustomKey(e){
             loadFileInput.click();
             return;
         }
-        if(v){ ZXLOAD.prime(); placeInput.value=v; startBuild(); }
+        if(v){ ZXLOAD.prime(); csTypeEl.blur(); placeInput.value=v; startBuild(); }
         return;
     }
-    if(e.key==='Backspace'){ CS.customText=CS.customText.slice(0,-1); csPaint(); return; }
-    if(e.key==='Escape'){ CS_LOAD_PENDING=false; CS.custom=false; CS.ready=true; csPaint(); return; }
+    if(e.key==='Backspace'){ CS.customText=CS.customText.slice(0,-1); csTypeEl.value=CS.customText; csPaint(); return; }
+    if(e.key==='Escape'){ CS_LOAD_PENDING=false; CS.custom=false; CS.ready=true; csTypeEl.blur(); csPaint(); return; }
     if(e.key.length===1 && CS.customText.length<22 && /[A-Za-z0-9 ,'.\-]/.test(e.key)){
-        CS.customText += e.key.toUpperCase(); csPaint();
+        CS.customText += e.key.toUpperCase(); csTypeEl.value=CS.customText; csPaint();
     }
 }
 
 // Key + click handling for the whole city screen.
 document.addEventListener('keydown', e=>{
     if(menuEl.style.display==='none') return;     // only when the menu is showing
-    if(CS.custom){ e.preventDefault(); csCustomKey(e); return; }
+    if(CS.custom){ e.preventDefault(); csCustomKey(e); csFocusType(); return; }
     // Intro still animating: any key finishes it. A 1-5 press also picks.
     if(!CS.ready){ csSkipIntro(); }
     if(e.key>='1' && e.key<='5'){ e.preventDefault(); csChoose(+e.key); }
 });
 // Click an option line with the mouse too.
 cityCanvas.addEventListener('click', e=>{
+    if(CS.custom){ csFocusType(); return; }   // tap again to bring the phone keyboard back
     if(!CS.ready){ csSkipIntro(); return; }   // first click just skips the intro
     const rect=cityCanvas.getBoundingClientRect();
     const row=Math.floor(((e.clientY-rect.top)/rect.height)*24);
-    for(let i=0;i<5;i++){ if(row===ROW_FIRST+i*ROW_GAP){ csChoose(i+1); return; } }
+    // Forgiving hit rows (the text row plus the gap below it) so fingers find them.
+    const i=Math.floor((row-ROW_FIRST)/ROW_GAP);
+    if(i>=0 && i<5 && row>=ROW_FIRST) csChoose(i+1);
 });
 // Hidden input still drives startBuild() (it reads placeInput.value).
 placeInput.addEventListener('keydown', e=>{ e.stopPropagation(); });
@@ -5686,8 +5729,10 @@ function updateTraceCount(){
 
 // ── Page switch: 1 · ROADS  →  2 · SCENERY ──────────────────────────────────
 const TRACE_HINTS = {
-    roads:   'CLICK ROADS TO PICK &middot; KEEP ROAD LOAD BELOW 8/10 &middot; WHEEL TO ZOOM, DRAG TO MOVE &middot; SCENERY &#8250; WHEN READY',
-    scenery: 'EVERY ROAD STARTS AS FIELDS &middot; PICK A ZONE AND PAINT ALONG ROADS &middot; WHEEL TO ZOOM, RIGHT-DRAG TO MOVE &middot; BUILD WHEN READY',
+    roads:   IS_TOUCH ? 'TAP ROADS TO PICK &middot; KEEP ROAD LOAD BELOW 8/10 &middot; PINCH TO ZOOM, DRAG TO MOVE &middot; SCENERY &#8250; WHEN READY'
+                      : 'CLICK ROADS TO PICK &middot; KEEP ROAD LOAD BELOW 8/10 &middot; WHEEL TO ZOOM, DRAG TO MOVE &middot; SCENERY &#8250; WHEN READY',
+    scenery: IS_TOUCH ? 'EVERY ROAD STARTS AS FIELDS &middot; PICK A ZONE, DRAG ONE FINGER TO PAINT &middot; PINCH OR TWO FINGERS TO ZOOM AND MOVE &middot; BUILD WHEN READY'
+                      : 'EVERY ROAD STARTS AS FIELDS &middot; PICK A ZONE AND PAINT ALONG ROADS &middot; WHEEL TO ZOOM, RIGHT-DRAG TO MOVE &middot; BUILD WHEN READY',
 };
 function setTracePage(page){
     if(page==='scenery' && TRACE.sel.size===0) page='roads';   // nothing to dress yet
@@ -6065,9 +6110,63 @@ window.addEventListener('mousemove', e=>{
 });
 window.addEventListener('mouseup', ()=>{
     if(!TPAN) return;
-    TRACE._justPanned = TPAN.moved && TPAN.left;   // swallow the click that follows
+    if(TPAN.moved && TPAN.left) TRACE._justPanned = performance.now();   // swallow the click that follows
     TPAN=null; tcanvas.style.cursor = TRACE.spawnMode ? 'cell' : 'crosshair';
 });
+
+// ── Touch: pinch to zoom, drag to move (roads) or paint (scenery) ───────────
+// Two fingers: zoom about their midpoint and move with it (both pages).
+// One finger, ROADS page: drag moves the map; a tap still picks (the browser's
+// synthesised click runs the normal handler). One finger, SCENERY page: drag
+// paints with the current zone, like a mouse drag.
+let TTOUCH = null;
+function touchPts(e){ return [...e.touches].map(t=>canvasXY(t)); }
+tcanvas.addEventListener('touchstart', e=>{
+    if(!TRACE.view) return;
+    const pts=touchPts(e);
+    if(pts.length>=2){
+        e.preventDefault();
+        const [a,b]=pts, V=TRACE.view;
+        TTOUCH={ mode:'pinch', d0:Math.hypot(b[0]-a[0],b[1]-a[1])||1,
+                 m0:[(a[0]+b[0])/2,(a[1]+b[1])/2], z0:V.z, ox0:V.ox, oy0:V.oy };
+        TRACE.painting=false;
+    } else if(pts.length===1 && (!TTOUCH || TTOUCH.mode!=='pinch')){
+        const [x,y]=pts[0];
+        const paint = TRACE.editMode && TRACE.paintTool!=='__church';
+        TTOUCH={ mode: paint?'paint':'pan', x0:x, y0:y, ox0:TRACE.view.ox, oy0:TRACE.view.oy, moved:false };
+        if(paint){ e.preventDefault(); if(paintAt(x,y)) drawTrace(); }
+    }
+}, {passive:false});
+tcanvas.addEventListener('touchmove', e=>{
+    if(!TTOUCH) return;
+    e.preventDefault();
+    const pts=touchPts(e), V=TRACE.view;
+    if(TTOUCH.mode==='pinch'){
+        if(pts.length<2) return;
+        const [a,b]=pts;
+        const d=Math.hypot(b[0]-a[0],b[1]-a[1])||1, m=[(a[0]+b[0])/2,(a[1]+b[1])/2];
+        const nz=Math.max(1, Math.min(TZ_MAX, TTOUCH.z0*d/TTOUCH.d0)), k=nz/TTOUCH.z0;
+        // keep the map point under the starting midpoint under the moving midpoint
+        V.ox = m[0]-(TTOUCH.m0[0]-TTOUCH.ox0)*k;
+        V.oy = m[1]-(TTOUCH.m0[1]-TTOUCH.oy0)*k;
+        V.z  = nz; clampView(); drawTrace();
+    } else if(TTOUCH.mode==='pan'){
+        const [x,y]=pts[0]; const dx=x-TTOUCH.x0, dy=y-TTOUCH.y0;
+        if(!TTOUCH.moved && Math.hypot(dx,dy)<6) return;
+        TTOUCH.moved=true;
+        V.ox=TTOUCH.ox0+dx; V.oy=TTOUCH.oy0+dy; clampView(); drawTrace();
+    } else if(TTOUCH.mode==='paint'){
+        const [x,y]=pts[0]; if(paintAt(x,y)) drawTrace();
+    }
+}, {passive:false});
+function touchEnd(e){
+    if(!TTOUCH) return;
+    if(TTOUCH.moved || TTOUCH.mode==='pinch') TRACE._justPanned = performance.now();   // swallow a click after a drag/pinch
+    if(TTOUCH.mode==='pinch' && e.touches.length){ TTOUCH={mode:'pinch-tail'}; return; }
+    if(!e.touches.length) TTOUCH=null;
+}
+tcanvas.addEventListener('touchend', touchEnd);
+tcanvas.addEventListener('touchcancel', touchEnd);
 
 function canvasXY(e){
     const r=tcanvas.getBoundingClientRect();
@@ -6093,7 +6192,9 @@ tcanvas.addEventListener('mousemove', e=>{
     if(h!==TRACE.hover || h>=0){ TRACE.hover=h; drawTrace(); }
 });
 tcanvas.addEventListener('click', e=>{
-    if(TRACE._justPanned){ TRACE._justPanned=false; return; }   // that was a drag
+    // A click within 0.5 s of a drag/pinch ending was part of that gesture, not a pick.
+    // (Timestamped so a stale flag can never eat a later, genuine tap.)
+    if(TRACE._justPanned && performance.now()-TRACE._justPanned < 500){ TRACE._justPanned=0; return; }
     const [x,y]=canvasXY(e);
     if(TRACE.editMode){
         if(TRACE.paintTool==='__church'){
@@ -6360,7 +6461,7 @@ function titlePrompt(){
     const blink = () => {
         if(TITLE.done) return;
         ttctx.drawImage(TITLE.img, 0, 184, 256, 8, 0, 184, 256, 8);
-        if(on) zxCentre(ttctx, 'PRESS ANY KEY', 23, '#FFFFFF', '#000000');
+        if(on) zxCentre(ttctx, IS_TOUCH ? 'TAP TO START' : 'PRESS ANY KEY', 23, '#FFFFFF', '#000000');
         on = !on;
         TITLE.raf = setTimeout(blink, 500);
     };
