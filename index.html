@@ -191,25 +191,38 @@ body.touch #map {
 }
 #tpad {
     display:none; position:fixed; left:0; right:0; bottom:0; z-index:9000;
-    height:150px; padding:10px 12px calc(10px + env(safe-area-inset-bottom));
-    background:#000; border-top:2px solid #00C000;
+    height:150px; padding:16px 12px calc(10px + env(safe-area-inset-bottom));
+    background:#000;
+    /* the Spectrum rainbow along the top edge of the control bar */
+    background-image:linear-gradient(#D80000 0 3px, #D8D800 3px 6px, #00D800 6px 9px, #00D8D8 9px 12px, transparent 12px);
     justify-content:space-between; align-items:flex-end;
     touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
 }
 #tpad.on { display:flex; }
-#tpad .grp { display:flex; gap:10px; align-items:flex-end; }
+#tpad .grp { display:flex; gap:8px; align-items:flex-end; }
+/* Spectrum attribute blocks: solid PAPER colour, ROM-font INK label, square
+   corners. Pressing swaps ink and paper (inverse video), the way the Spectrum
+   marked a highlighted line. Each label is drawn twice (normal + inverse). */
 .tp {
-    width:84px; height:118px; border:3px solid #00C000; background:#000; color:#00C000;
-    font:bold 13px monospace; letter-spacing:1px; display:flex; align-items:center;
-    justify-content:center; text-align:center; touch-action:none;
+    width:92px; height:116px; display:flex; align-items:center; justify-content:center;
+    touch-action:none; outline:4px solid #000; outline-offset:-4px;
 }
-.tp.hb   { width:112px; border-color:#C00000; color:#C00000; }
-.tp.down { background:#00C000; color:#000; }
-.tp.hb.down { background:#C00000; color:#000; }
+.tp.go { background:#00D800; }
+.tp.st { background:#D80000; }
+.tp.hb { background:#D8D800; width:120px; }
+.tp .lbl { display:flex; flex-direction:column; align-items:center; gap:6px; }
+.tp .lbl.inv { display:none; }
+.tp.down { background:#000; }
+.tp.go { outline-color:#00D800; } .tp.st { outline-color:#D80000; } .tp.hb { outline-color:#D8D800; }
+.tp.down .lbl.norm { display:none; }
+.tp.down .lbl.inv  { display:flex; }
 #tp-menu {
-    align-self:flex-start; width:64px; height:34px; border:2px solid #00C0C0; background:#000;
-    color:#00C0C0; font:bold 11px monospace; letter-spacing:1px;
+    display:none; position:fixed; top:6px; right:6px; z-index:9001;
+    background:#000; padding:6px 5px; outline:2px solid #00D8D8; outline-offset:-2px;
+    touch-action:manipulation;
 }
+#tp-menu.on { display:block; }
+#tp-menu:active { background:#00D8D8; }
 #tp-tilt { position:fixed; top:6px; left:6px; z-index:9001; display:none;
     font:bold 11px monospace; color:#000; background:#C0C000; padding:4px 6px; }
 </style>
@@ -285,12 +298,12 @@ body.touch #map {
 <!-- ── Phone driving controls (Session 24): shown only on touch devices while driving ── -->
 <div id="tpad">
     <div class="grp">
-        <div class="tp" id="tp-brake">BRAKE</div>
-        <div class="tp" id="tp-accel">ACCEL</div>
+        <div class="tp go" id="tp-accel" data-l="ACCEL"></div>
+        <div class="tp st" id="tp-brake" data-l="BRAKE"></div>
     </div>
-    <button id="tp-menu">MENU</button>
-    <div class="tp hb" id="tp-hb">HAND<br>BRAKE</div>
+    <div class="tp hb" id="tp-hb" data-l="HAND|BRAKE"></div>
 </div>
+<div id="tp-menu" data-l="MENU"></div>
 <div id="tp-tilt">TILT OFF &middot; TAP TO ENABLE</div>
 
 <!-- ── Options screen: Spectrum-style, opened with Start / Esc ── -->
@@ -7005,9 +7018,9 @@ requestAnimationFrame(optsPadPoll);
 //  and needs no calibration: level = straight ahead.
 // ═══════════════════════════════════════════════════════════════════════════
 const TILT = {
-    FULL_DEG: 25,     // tilt for full lock (kept low so the screen doesn't auto-rotate)
+    FULL_DEG: 14,     // tilt for full lock (S24b: was 25; halved the travel = twice as responsive)
     DEAD_DEG: 3,      // ignore small wobbles around level
-    SMOOTH:   0.35,   // 0..1 low-pass on the raw reading
+    SMOOTH:   0.6,    // 0..1 low-pass on the raw reading (higher = less lag)
     steer: 0, raw: 0, live: false,
 };
 const TOUCH = { accel:false, brake:false, hb:false };
@@ -7076,6 +7089,18 @@ if(IS_TOUCH){
         el.addEventListener('lostpointercapture', off);
         el.addEventListener('contextmenu', e=>e.preventDefault());
     };
+    // ROM-font labels: ink colours per button, drawn once normal and once inverse
+    const INK = { 'tp-accel':['#000000','#00D800'], 'tp-brake':['#FFFFFF','#D80000'], 'tp-hb':['#000000','#D8D800'] };
+    for(const id in INK){
+        const el = $(id);
+        for(const [cls, ink] of [['norm', INK[id][0]], ['inv', INK[id][1]]]){
+            const box = document.createElement('div'); box.className = 'lbl '+cls;
+            for(const line of el.dataset.l.split('|')) box.appendChild(zxLabelCanvas(line, 2, ink, 'transparent'));
+            el.appendChild(box);
+        }
+    }
+    $('tp-menu').appendChild(zxLabelCanvas('MENU', 1, '#00D8D8', 'transparent'));
+
     bindHold('tp-accel','accel');
     bindHold('tp-brake','brake');
     bindHold('tp-hb','hb');
@@ -7093,6 +7118,7 @@ if(IS_TOUCH){
     setInterval(()=>{
         const driving = MAP_LOADED && gameEl.style.display!=='none';
         tpad.classList.toggle('on', driving);
+        $('tp-menu').classList.toggle('on', driving);
         document.body.classList.toggle('driving', driving);
         tiltNote.style.display = (driving && !TILT.live) ? 'block' : 'none';
         if(!driving){ TOUCH.accel=TOUCH.brake=TOUCH.hb=false;
