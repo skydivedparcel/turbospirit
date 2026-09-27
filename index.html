@@ -716,6 +716,7 @@ function bucketsNear(buckets, cx, cz, reach){
 // the ribbon geometry, all scenery arrays, the minimap bounds, and the car's
 // start pose, then flips MAP_LOADED so the loop begins drawing.
 function loadMap(data){
+    snmQuit(true);                       // a new map ends any Saturday Night run
     VERBATIM_LOAD = false;               // a freshly built city is not a verbatim load
     MANUAL_PATCHES = [];                 // hand edits belong to a build/snapshot, not carried across cities
     LOADED_ROADS  = data.roads;          // kept so [ / ] can re-exaggerate live
@@ -1846,6 +1847,7 @@ function drawMinimap(){
     mctx.closePath();
     mctx.fillStyle = '#0ff'; mctx.fill();
     mctx.lineWidth = 1.5; mctx.strokeStyle = '#000'; mctx.stroke();
+    snmDrawMinimap(M);   // Saturday Night stops
 
     // title + border
     mctx.font = '11px monospace'; mctx.textAlign='left'; mctx.textBaseline='top';
@@ -1981,7 +1983,8 @@ function drawBuildings(){
         // index (not random) keeps the same buildings culled frame to frame, so
         // the skyline doesn't shimmer as you drive.
         if(typeof BUILD_DENSITY!=='undefined' && BUILD_DENSITY < 1
-           && ((bi*2654435761)>>>0)%1000 >= BUILD_DENSITY*1000) continue;
+           && ((bi*2654435761)>>>0)%1000 >= BUILD_DENSITY*1000
+           && !(SNM.active && SNM.doorMap.has(bi))) continue;
         const B=BUILDINGS[bi];
         const bx=B[0], bz=B[1], yaw=B[2]*Math.PI/180, h=B[3];
         const type=B[4]||'generic';
@@ -2066,6 +2069,7 @@ function drawBuildings(){
                 faces.push({scr:projectPolyToScreen(clipped), col:tpl.side, depth:far, keep});
             }
         }
+        if(SNM.active && SNM.doorMap.size){ const st=SNM.doorMap.get(bi); if(st) snmDoorFaces(st, gy, faces, keep); }
     }
     faces.sort((a,b)=>b.depth-a.depth);
     for(const f of faces){
@@ -2092,6 +2096,7 @@ function drawProps(){
     // Only props in nearby cells — distant trees/hedges aren't iterated at all.
     const idxs = bucketsNear(PROP_BUCKETS, CAM.x, CAM.z, FAR);
     for(let q=0;q<idxs.length;q++){
+        if(SNM.active && SNM.hideProps && SNM.hideProps.has(idxs[q])) continue;   // Saturday Night garden paths
         const p=PROPS[idxs[q]];
         const kind=p[0];
         // radial reject on the anchor point before any matrix work
@@ -2955,6 +2960,12 @@ function paintDashboard(){
 function render(){
     clear();
     resetClip();
+    if(SNM.active && SNM.screen){         // Saturday Night: a static screen instead of the world
+        snmRenderScreen();
+        ctx.putImageData(img,0,0);
+        drawMinimap();
+        return;
+    }
     // ── Original four-band fixed layout (from road_vp22.html) ──
     // blue sky above the play window
     for(let y=0;y<HORIZON_Y;y++) for(let x=0;x<=VIEW_X1;x++) px(x,y,COL.BLUE);
@@ -3210,14 +3221,16 @@ function render(){
     // tall ones rise above the horizon into the sky.
     if(SHOW_BUILDINGS) drawBuildings(); else drawHouses();
     if(SHOW_BUILDINGS) drawProps();
+    if(SNM.active){ if(SNM.onFoot) snmDrawFigures(); snmDrawBeacons(); }   // Saturday Night
     resetClip();
 
     setClip(0, HORIZON_Y, VIEW_X1, DASHBOARD_Y-1);
     updateCarCrash();
-    drawCar();      // player's car: fixed-position sprite over the road
+    if(!(SNM.active && SNM.onFoot)) drawCar();   // on foot, the car is a world sprite instead
     resetClip();
 
     paintDashboard();       // full cockpit art + scrolling map panel + road name
+    if(SNM.active) snmDrawHUD();
 
     ctx.putImageData(img,0,0);
 
@@ -4173,6 +4186,7 @@ function exportBuildData(){
 // geometry. To restore the original-build behaviour, pick a city again.
 
 function loadSnapshot(snap){
+    snmQuit(true);                       // a new map ends any Saturday Night run
     if(!snap || snap.format!=='tedrive-build-snapshot'){
         alert('Not a valid build snapshot file.'); return;
     }
@@ -6482,8 +6496,1308 @@ async function buildFromSelection(){
 }
 
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  SATURDAY NIGHT MODE (Session 25)
+//  An errand run on the current map: pick up the girlfriend (don't be late),
+//  get to the video shop before it sells out, choose one of three takeaways,
+//  then get home before the food goes cold. Driving off the carriageway with
+//  her in the car raises a STRESS meter. Any timer running out, or stress
+//  maxing out, ends the night (hard fail). You can get out of the car and walk:
+//  walking up to a door and pressing E opens a static interior screen.
+//
+//  Locations are picked from the map's own buildings (type 'shop' / 'house'),
+//  so it works on any build or snapshot that has enough of both. No format
+//  change: nothing here is saved into the map file.
+//
+//  Entry: OPTIONS › SATURDAY NIGHT. Action key: E / ENTER (pad Y or X).
+// ═══════════════════════════════════════════════════════════════════════════
+ZXFONT['£'] = [0,28,34,120,32,32,126,0];     // £ (the ROM glyph)
+
+const SNM_GIRL = 'TRACEY';          // the girlfriend's name (one place to change it)
+
+// All the gameplay numbers in one place. Times are seconds, distances world units
+// (1 m = 0.6 wu), per-frame values at the fixed 20 Hz loop.
+const SNM_TUNE = {
+    // Timers are worked out from the ROUTE BY ROAD between two stops (S25b), not
+    // the straight line: budget = baseS + perRoadWu × road distance + walkS.
+    // perRoadWu 0.09 s/wu = an average of ~41 mph along the route.
+    baseS:        20,     // every timed leg gets this much, however short
+    perRoadWu:    0.09,   // + this many seconds per world unit of road route
+    walkS:        12,     // + this for the walk at the end of a leg
+    offRoad:      6.8,    // further than this from a centreline = on the kerb / off the road
+    // Stress (S25b: much harsher). 100 = she's had enough.
+    stressRise:   2.2,    // per frame off the road at speed: ~2 s of kerb-hopping ends the night
+    stressMinF:   0.4,    // even crawling over a kerb rises at 40% of that
+    stressFullSpd:0.6,    // speed (wu/frame, ~45 mph) at which stress rises fastest
+    stressJolt:   10,     // one-off jump every time you mount the kerb
+    stressFall:   0.02,   // ebbs away per frame on the road (0.4 a second: it lingers)
+    sellAt:       [0.4, 0.7],   // share of the video leg's time gone when the 1st / 2nd film sells out
+    walkSpeed:    0.15,   // on foot (~11 mph — a brisk jog; the night's short)
+    walkTurn:     7,      // deg/frame turning on foot
+    doorReach:    3.0,    // how close to a door you must be to use it
+    carReach:     4.0,    // how close to the car to get in
+    stopSpeed:    0.05,   // car must be slower than this (~4 mph) to get out
+    maxDoorRoad:  32,     // ignore buildings whose door is further than this from a road
+    minLegWu:     150,    // try to keep stops at least this far apart (~250 m)
+};
+
+const SNM_VIDEOS = [
+    { genre:'HORROR',  title:'ALIENS',                   lines:['ALIENS'],
+      box:[0,0,0],       ink:[0x00,0xFF,0x00], icon:'eyes'  },
+    { genre:'COMEDY',  title:"FERRIS BUELLER'S DAY OFF", lines:['FERRIS',"BUELLER'S",'DAY OFF'],
+      box:[0xFF,0xFF,0], ink:[0,0,0],          icon:'grin'  },
+    { genre:'ROM-COM', title:'CROCODILE DUNDEE',         lines:['CROCODILE','DUNDEE'],
+      box:[0xC0,0,0xC0], ink:[0xFF,0xFF,0xFF], icon:'heart' },
+];
+const SNM_TAKEAWAYS = [
+    { key:'chippy',  short:'CHIPPY',  name:'THE GOLDEN FRYER', col:[0xFF,0xFF,0], the:'THE CHIPPY', a:'FISH AND CHIPS',
+      menu:[['COD & CHIPS','1.60'],['SAVELOY & CHIPS','1.10'],['PIE & CHIPS','1.30']] },
+    { key:'chinese', short:'CHINESE', name:'LUCKY DRAGON',     col:[0xFF,0,0], the:'A CHINESE', a:'A CHINESE',
+      menu:[['SWEET & SOUR PORK','2.40'],['CHICKEN CHOW MEIN','2.20'],['SPECIAL FRIED RICE','1.80']] },
+    { key:'indian',  short:'INDIAN',  name:'STAR OF INDIA',    col:[0,0,0xFF], the:'AN INDIAN', a:'AN INDIAN',
+      menu:[['CHICKEN TIKKA MASALA','3.10'],['LAMB BHUNA','3.40'],['VEG BIRYANI','2.60']] },
+];
+const SNM_COL = { home:[0,0xFF,0], girl:[0xFF,0,0xFF], video:[0,0xFF,0xFF] };
+
+let SNM = { active:false };
+function snmBlank(){
+    return { active:false, screen:null, stage:null, onFoot:false,
+             walker:null, girl:null, plan:null, timer:null, legs:{},
+             stress:0, peak:0, choice:{}, fail:null, t:0, prompt:'',
+             pad:{}, savedStart:null, doorMap:new Map() };
+}
+SNM = snmBlank();
+
+// ── Fast road-point lookup (a grid over ROAD_PTS) ───────────────────────────
+// distToRoad2() scans every centreline point; fine once a frame, too slow for
+// picking doors across a thousand buildings. This grid answers the same question.
+let SNM_RGRID = null;
+const SNM_RCELL = 20;
+function snmBuildRoadGrid(){
+    const g = new Map();
+    for(const p of ROAD_PTS){
+        const k = Math.floor(p.x/SNM_RCELL)+','+Math.floor(p.z/SNM_RCELL);
+        let a = g.get(k); if(!a){ a=[]; g.set(k,a); } a.push(p);
+    }
+    SNM_RGRID = g;
+}
+function snmRoadDist(x, z){
+    if(!SNM_RGRID) snmBuildRoadGrid();
+    const gx=Math.floor(x/SNM_RCELL), gz=Math.floor(z/SNM_RCELL);
+    let best=Infinity;
+    for(let r=0; r<=4; r++){
+        for(let ix=gx-r; ix<=gx+r; ix++) for(let iz=gz-r; iz<=gz+r; iz++){
+            if(r && Math.abs(ix-gx)<r && Math.abs(iz-gz)<r) continue;   // ring only
+            const a=SNM_RGRID.get(ix+','+iz); if(!a) continue;
+            for(const p of a){ const d=(p.x-x)*(p.x-x)+(p.z-z)*(p.z-z); if(d<best) best=d; }
+        }
+        // once something is found, one more ring guarantees it is the nearest
+        if(best < ((r)*SNM_RCELL)**2) break;
+    }
+    return best===Infinity ? Math.sqrt(distToRoad2(x,z)) : Math.sqrt(best);
+}
+
+// ── Route distance by road (S25b) ───────────────────────────────────────────
+// A graph over the road centrelines (every 2nd ribbon point, linked along each
+// road and to other roads' points within 5 wu, which joins junctions). Timers
+// come from the shortest route, so a stop across a river or round a long loop
+// gets the time it really needs. Unreachable → 1.4 × straight line.
+let SNM_GRAPH = null;
+function snmBuildGraph(){
+    const nodes=[], adj=[], grid=new Map(), C=8;
+    const key=(x,z)=>Math.floor(x/C)+','+Math.floor(z/C);
+    for(let r=0;r<RING.roads.length;r++){
+        const ring=RING.roads[r].ring; let prev=-1;
+        for(let i=0;i<ring.length;i++){
+            if(i%2 && i!==ring.length-1) continue;
+            const id=nodes.length; nodes.push({x:ring[i].cx, z:ring[i].cz, r}); adj.push([]);
+            if(prev>=0){ const w=Math.hypot(nodes[prev].x-nodes[id].x, nodes[prev].z-nodes[id].z);
+                         adj[prev].push(id,w); adj[id].push(prev,w); }
+            prev=id;
+            const k=key(ring[i].cx, ring[i].cz); let a=grid.get(k); if(!a){a=[];grid.set(k,a);} a.push(id);
+        }
+    }
+    for(let id=0;id<nodes.length;id++){               // junction links
+        const n=nodes[id], gx=Math.floor(n.x/C), gz=Math.floor(n.z/C);
+        for(let ix=gx-1;ix<=gx+1;ix++) for(let iz=gz-1;iz<=gz+1;iz++){
+            const a=grid.get(ix+','+iz); if(!a) continue;
+            for(const j of a){ if(j<=id || nodes[j].r===n.r) continue;
+                const w=Math.hypot(nodes[j].x-n.x, nodes[j].z-n.z);
+                if(w<5){ adj[id].push(j,w); adj[j].push(id,w); } }
+        }
+    }
+    SNM_GRAPH={nodes, adj, grid, C};
+}
+function snmNearestNode(x, z){
+    const G=SNM_GRAPH; let best=-1, bd=Infinity;
+    const gx=Math.floor(x/G.C), gz=Math.floor(z/G.C);
+    for(let r=0;r<=40 && best<0;r++){
+        for(let ix=gx-r;ix<=gx+r;ix++) for(let iz=gz-r;iz<=gz+r;iz++){
+            if(r && Math.abs(ix-gx)<r && Math.abs(iz-gz)<r) continue;
+            const a=G.grid.get(ix+','+iz); if(!a) continue;
+            for(const j of a){ const d=(G.nodes[j].x-x)**2+(G.nodes[j].z-z)**2; if(d<bd){bd=d;best=j;} }
+        }
+        if(best>=0){ // one more ring to be sure
+            for(let ix=gx-r-1;ix<=gx+r+1;ix++) for(let iz=gz-r-1;iz<=gz+r+1;iz++){
+                const a=G.grid.get(ix+','+iz); if(!a) continue;
+                for(const j of a){ const d=(G.nodes[j].x-x)**2+(G.nodes[j].z-z)**2; if(d<bd){bd=d;best=j;} }
+            }
+        }
+    }
+    return { id:best, d:Math.sqrt(bd) };
+}
+// Road distance (world units) from point a to point b, including the bits
+// from each point to the road.
+function snmRouteDist(a, b){
+    if(!SNM_GRAPH) snmBuildGraph();
+    const G=SNM_GRAPH, A=snmNearestNode(a.x,a.z), B=snmNearestNode(b.x,b.z);
+    const straight=Math.hypot(a.x-b.x, a.z-b.z);
+    if(A.id<0 || B.id<0) return straight*1.4;
+    const dist=new Float64Array(G.nodes.length).fill(Infinity);
+    const heap=[[0,A.id]]; dist[A.id]=0;
+    const push=(d,i)=>{ heap.push([d,i]); let c=heap.length-1;
+        while(c>0){ const p=(c-1)>>1; if(heap[p][0]<=heap[c][0]) break; [heap[p],heap[c]]=[heap[c],heap[p]]; c=p; } };
+    const pop=()=>{ const top=heap[0], last=heap.pop();
+        if(heap.length){ heap[0]=last; let c=0;
+            for(;;){ const l=2*c+1, r=l+1; let m=c;
+                if(l<heap.length && heap[l][0]<heap[m][0]) m=l;
+                if(r<heap.length && heap[r][0]<heap[m][0]) m=r;
+                if(m===c) break; [heap[m],heap[c]]=[heap[c],heap[m]]; c=m; } }
+        return top; };
+    while(heap.length){
+        const [d,i]=pop(); if(d>dist[i]) continue;
+        if(i===B.id) return d + A.d + B.d;
+        const e=G.adj[i];
+        for(let k=0;k<e.length;k+=2){ const nd=d+e[k+1]; if(nd<dist[e[k]]){ dist[e[k]]=nd; push(nd,e[k]); } }
+    }
+    return straight*1.4;
+}
+function snmLegBudget(routeWu){ return Math.round(SNM_TUNE.baseS + SNM_TUNE.perRoadWu*routeWu + SNM_TUNE.walkS); }
+function snmKm(wu){ const m=Math.round(wu/SCALE); return m>=1000 ? (m/1000).toFixed(1)+' KM' : m+' M'; }
+// Start a timed leg, and say how far it is and how long you've got.
+function snmStartTimer(kind, routeWu){
+    const t=snmLegBudget(routeWu);
+    SNM.timer={ kind, left:t, total:t, route:routeWu };
+    snmSay(snmKm(routeWu)+' BY ROAD. '+snmClock(t)+' TO DO IT', 80);
+}
+
+// The door of a building: the middle of whichever wall faces the nearest road,
+// stepped a little out onto the path. nx/nz = the wall's outward normal.
+function snmDoorOf(bi){
+    const B=BUILDINGS[bi];
+    const yaw=B[2]*Math.PI/180, cy=Math.cos(yaw), sy=Math.sin(yaw);
+    const HW=(B.length>6)?B[6]:5.0, DEP=(B.length>7)?B[7]:3.5;
+    // local u axis = (cy,-sy) half HW; v axis = (sy,cy) half DEP (see drawBuildings)
+    const faces=[[ sy, cy, DEP, HW],[-sy,-cy, DEP, HW],[ cy,-sy, HW, DEP],[-cy, sy, HW, DEP]];
+    let best=null, bd=Infinity;
+    for(const [nx,nz,off,half] of faces){
+        const fx=B[0]+nx*off, fz=B[1]+nz*off;
+        const d=snmRoadDist(fx,fz);
+        if(d<bd){ bd=d; best={nx,nz,half,fx,fz}; }
+    }
+    return { x:best.fx+best.nx*0.9, z:best.fz+best.nz*0.9, fx:best.fx, fz:best.fz,
+             nx:best.nx, nz:best.nz, half:best.half, roadD:bd };
+}
+
+// ── Picking the night's locations ───────────────────────────────────────────
+function snmPlan(){
+    snmBuildRoadGrid();
+    const houses=[], shops=[];
+    for(let i=0;i<BUILDINGS.length;i++){
+        const t=BUILDINGS[i][4];
+        if(t!=='house' && t!=='shop') continue;
+        const door=snmDoorOf(i);
+        if(door.roadD > SNM_TUNE.maxDoorRoad) continue;
+        (t==='house'?houses:shops).push({ bi:i, x:door.x, z:door.z, door });
+    }
+    if(houses.length<2 || shops.length<4)
+        return { err:true, houses:houses.length, shops:shops.length };
+
+    const rnd = mulberry32((Date.now() ^ 0x5A7) >>> 0);
+    const D = (a,b)=>Math.hypot(a.x-b.x, a.z-b.z);
+    const pickQuantile = (list, key, q)=>{            // element at quantile q of list sorted by key
+        const s=[...list].sort((a,b)=>key(a)-key(b));
+        return s[Math.max(0, Math.min(s.length-1, Math.round(q*(s.length-1))))];
+    };
+
+    // HOME: the house nearest the spawn point.
+    const sp={x:CAR.startX, z:CAR.startZ};
+    let home=houses[0]; for(const h of houses) if(D(h,sp)<D(home,sp)) home=h;
+
+    // GIRL: a house a fair way off — somewhere in the 35–75% band of how far
+    // houses get from home, chosen at random so every night is different.
+    const others=houses.filter(h=>h!==home);
+    const farH=Math.max(...others.map(h=>D(h,home)));
+    let band=others.filter(h=>{ const d=D(h,home); return d>=0.35*farH && d<=0.75*farH; });
+    if(!band.length) band=others;
+    const girl=band[Math.floor(rnd()*band.length)];
+
+    // VIDEO: a shop a fair way from her house, preferably not back beside home.
+    let vband=shops.filter(s=>D(s,girl)>=SNM_TUNE.minLegWu && D(s,home)>=SNM_TUNE.minLegWu*0.6);
+    if(!vband.length) vband=shops;
+    const video=pickQuantile(vband, s=>D(s,girl), 0.25 + rnd()*0.5);
+
+    // TAKEAWAYS: three more shops spread from near home to far from home, so the
+    // choice matters for the cold-food clock. Keep them apart where possible.
+    const rest=shops.filter(s=>s!==video);
+    const take=[];
+    for(const q of [0.12, 0.5, 0.88]){
+        const ok=rest.filter(s=>!take.includes(s) && take.every(t=>D(t,s)>=SNM_TUNE.minLegWu*0.5)
+                             && D(s,video)>=40);
+        const pool=ok.length ? ok : rest.filter(s=>!take.includes(s));
+        take.push(pickQuantile(pool, s=>D(s,home), q));
+    }
+    // shuffle which takeaway is which
+    const kinds=[0,1,2].sort(()=>rnd()-0.5);
+
+    const mk=(src, kind, extra)=>Object.assign({ kind, bi:src.bi, x:src.x, z:src.z, door:src.door }, extra||{});
+    const plan = {
+        home:  mk(home,  'home',  { col:SNM_COL.home,  label:'HOME' }),
+        girl:  mk(girl,  'girl',  { col:SNM_COL.girl,  label:SNM_GIRL }),
+        video: mk(video, 'video', { col:SNM_COL.video, label:'VIDEOS' }),
+        take:  take.map((t,i)=>{ const T=SNM_TAKEAWAYS[kinds[i]];
+                  return mk(t, 'take', { col:T.col, label:T.short, tk:kinds[i] }); }),
+    };
+    // Where the car starts: parked on the road right outside home.
+    plan.park = snmParkingSpot(plan.home.door);
+    // Road routes for the two legs known up front. The cold-food leg is worked
+    // out when you finally get the food, from THAT takeaway to home.
+    snmBuildGraph();
+    plan.route = { girl: snmRouteDist(plan.park, plan.girl.door),
+                   video: snmRouteDist(plan.girl.door, plan.video.door) };
+    plan.budget = { girl: snmLegBudget(plan.route.girl), video: snmLegBudget(plan.route.video) };
+    // Which film goes first, second and last (a different order every night).
+    plan.sellOrder = [0,1,2].sort(()=>rnd()-0.5);
+    return plan;
+}
+
+// Nearest road point to (door) and the road's direction there; the car is set
+// on the left-hand side of the carriageway (UK), pointing along the road.
+function snmParkingSpot(door){
+    let best=null, bd=Infinity;
+    for(const road of RING.roads){
+        const r=road.ring;
+        for(let i=0;i<r.length;i++){
+            const d=(r[i].cx-door.x)**2+(r[i].cz-door.z)**2;
+            if(d<bd){ bd=d; best={r,i}; }
+        }
+    }
+    if(!best) return { x:CAR.startX, z:CAR.startZ, yaw:CAR.startYaw };
+    const {r,i}=best;
+    const a=r[Math.max(0,i-1)], b=r[Math.min(r.length-1,i+1)];
+    let yaw=Math.atan2(b.cx-a.cx, b.cz-a.cz)*180/Math.PI;
+    // left of heading = -(cos,-sin)
+    let yr=yaw*Math.PI/180, lx=-Math.cos(yr), lz=Math.sin(yr);
+    // park on the side of the road the house is on
+    const side = ((door.x-r[i].cx)*lx + (door.z-r[i].cz)*lz) >= 0 ? 1 : -1;
+    if(side<0){ yaw+=180; yr=yaw*Math.PI/180; lx=-Math.cos(yr); lz=Math.sin(yr); }
+    return { x:r[i].cx+lx*3, z:r[i].cz+lz*3, yaw:((yaw%360)+360)%360 };
+}
+
+// ── Start / stop ────────────────────────────────────────────────────────────
+function snmStart(){
+    if(!MAP_LOADED) return;
+    const keepStart = SNM.active ? SNM.savedStart : null;
+    SNM = snmBlank();
+    SNM.active = true;
+    SNM.savedStart = keepStart || { x:CAR.startX, z:CAR.startZ, yaw:CAR.startYaw };
+    SNM_RGRID = null; SNM_GRAPH = null;     // rebuilt for this map
+    const plan = snmPlan();
+    if(plan.err){ SNM.screen = { kind:'noplace', houses:plan.houses, shops:plan.shops, t:0 }; return; }
+    SNM.plan = plan;
+    SNM.screen = { kind:'brief', t:0 };
+}
+function snmBegin(){          // (re)start the run with the current plan
+    const P = SNM.plan;
+    SNM.stage='girl'; SNM.onFoot=false; SNM.walker=null;
+    SNM.girl={ state:'home', x:P.girl.door.x, z:P.girl.door.z, yaw:0, phase:0, trail:[] };
+    SNM.stress=0; SNM.peak=0; SNM.choice={}; SNM.fail=null; SNM.legs={};
+    SNM.timer=null; snmStartTimer('girl', P.route.girl);
+    SNM.sold=0; SNM.take={ visited:[], want:null };
+    SNM.screen=null;
+    snmRefreshDoors();
+    snmOpenGates();
+    // park the car outside home; Space-reset brings you back here during the run
+    const pk=P.park;
+    CAR.startX=pk.x; CAR.startZ=pk.z; CAR.startYaw=pk.yaw;
+    CAR.x=pk.x; CAR.z=pk.z; CAR.yaw=pk.yaw; CAR.velDir=pk.yaw; CAR.speed=0;
+    CAR.modelYaw=0; CAR.revHold=0; CAR.hbAmt=0; CAR.steerSm=0;
+    CAR.y=groundHeightAt(CAR.x,CAR.z);
+    snmSnapCam();
+}
+function snmQuit(silent){
+    if(!SNM.active) return;
+    const s=SNM.savedStart;
+    if(s && MAP_LOADED){ CAR.startX=s.x; CAR.startZ=s.z; CAR.startYaw=s.yaw; }
+    SNM = snmBlank();
+    SNM_RGRID = null; SNM_GRAPH = null;
+}
+function snmFail(reason){
+    if(SNM.fail) return;
+    SNM.fail = reason; SNM.timer = null;
+    SNM.screen = { kind:'fail', t:0 };
+}
+// Doors to draw on the buildings (all of tonight's stops).
+function snmRefreshDoors(){
+    SNM.doorMap = new Map();
+    const P=SNM.plan; if(!P) return;
+    for(const s of [P.home, P.girl, P.video, ...P.take]) SNM.doorMap.set(s.bi, s);
+}
+// Gaps in the hedges: hide hedge runs and trees on the path from each of
+// tonight's doors down to the road, so you can walk straight up the garden.
+// Nothing is removed from the map — they're just not drawn (or saved) differently.
+function snmOpenGates(){
+    SNM.hideProps = new Set();
+    const P=SNM.plan; if(!P || typeof PROP_BUCKETS==='undefined') return;
+    const segD2=(px,pz,ax,az,bx,bz)=>{ const dx=bx-ax, dz=bz-az, L=dx*dx+dz*dz||1;
+        let t=((px-ax)*dx+(pz-az)*dz)/L; t=Math.max(0,Math.min(1,t));
+        const qx=ax+t*dx-px, qz=az+t*dz-pz; return qx*qx+qz*qz; };
+    for(const st of [P.home, P.girl, P.video, ...P.take]){
+        const d=st.door, len=d.roadD+2;
+        for(const i of bucketsNear(PROP_BUCKETS, d.x, d.z, len+6)){
+            const p=PROPS[i];
+            for(let t=-1; t<=len; t+=0.5){
+                const x=d.x+d.nx*t, z=d.z+d.nz*t;
+                const hit = p[0]==='hedgeline' ? segD2(x,z,p[1],p[2],p[3],p[4]) < 1.6*1.6
+                                               : (p[1]-x)**2+(p[2]-z)**2 < 2.2*2.2;
+                if(hit){ SNM.hideProps.add(i); break; }
+            }
+        }
+    }
+}
+// The stops you're heading for right now.
+function snmTargets(){
+    const P=SNM.plan; if(!P || !SNM.stage) return [];
+    if(SNM.stage==='girl')     return [P.girl];
+    if(SNM.stage==='video')    return [P.video];
+    if(SNM.stage==='takeaway'){
+        const want=SNM.take && SNM.take.want;
+        return want===null || want===undefined ? P.take : P.take.filter(t=>t.tk===want);
+    }
+    if(SNM.stage==='home')     return [P.home];
+    return [];
+}
+function snmSnapCam(){
+    const yr=CAR.yaw*Math.PI/180;
+    CAM.x=CAR.x-Math.sin(yr)*CHASE.back; CAM.z=CAR.z-Math.cos(yr)*CHASE.back;
+    CAM.y=CAR.y+CHASE.height; CAM.yaw=CAR.yaw; CAM.pitch=CHASE.pitch;
+}
+
+// ── Per-frame update (called from update() instead of the plain drive) ─────
+function snmUpdate(){
+    SNM.t++;
+    snmPadPoll();
+    if(SNM.screen){ SNM.screen.t++; snmScreenTick(); return; }
+
+    if(SNM.onFoot){ snmWalk(); }
+    else {
+        updateCar();
+        updateChaseCamera();
+        // STRESS: only with her in the car. Kerbs, pavements, gardens and fields
+        // all count; more speed = more stress. It ebbs away on the tarmac.
+        if(SNM.girl && SNM.girl.state==='car'){
+            const d=snmRoadDist(CAR.x, CAR.z), spd=Math.abs(CAR.speed);
+            if(d > SNM_TUNE.offRoad && spd > 0.02){
+                const T=SNM_TUNE, f=T.stressMinF + (1-T.stressMinF)*Math.min(1, spd/T.stressFullSpd);
+                SNM.stress = Math.min(100, SNM.stress + T.stressRise*f + (SNM.wasOff ? 0 : T.stressJolt));
+                if(!SNM.wasOff) snmSay(SNM_GIRL+': '+SNM_GRUMBLES[(Math.random()*SNM_GRUMBLES.length)|0], 40);
+                SNM.wasOff = true; SNM.onTick = 0;
+            } else {
+                SNM.stress = Math.max(0, SNM.stress - SNM_TUNE.stressFall);
+                if(++SNM.onTick > 40) SNM.wasOff = false;    // a second back on the road
+            }
+            SNM.peak = Math.max(SNM.peak, SNM.stress);
+            if(SNM.stress >= 100){ snmFail('stress'); return; }
+        }
+    }
+    // TIMER
+    if(SNM.timer){
+        SNM.timer.left -= 1/20;
+        if(SNM.timer.kind==='video'){           // films sell out as the clock runs down
+            const gone=1-SNM.timer.left/SNM.timer.total;
+            const n=SNM_TUNE.sellAt.filter(f=>gone>=f).length;
+            if(n>SNM.sold){ SNM.sold=n;
+                snmSay(SNM_VIDEOS[SNM.plan.sellOrder[n-1]].lines[0]+' HAS SOLD OUT!', 70); }
+        }
+        if(SNM.timer.left <= 0){ SNM.timer.left=0; snmFail(SNM.timer.kind); return; }
+    }
+    snmPrompt();
+}
+
+// What the bottom-of-screen prompt should say this frame.
+function snmPrompt(){
+    SNM.prompt=''; SNM.promptTarget=null;
+    const targets=snmTargets();
+    if(SNM.onFoot){
+        const W=SNM.walker;
+        for(const t of targets){
+            if(Math.hypot(W.x-t.door.x, W.z-t.door.z) < SNM_TUNE.doorReach){
+                SNM.promptTarget=t;
+                if(t.kind==='girl')  SNM.prompt='E  RING THE BELL';
+                else if(t.kind==='home') SNM.prompt = snmGirlClose() ? 'E  GO INSIDE' : 'WAIT FOR '+SNM_GIRL;
+                else SNM.prompt='E  GO IN';
+                return;
+            }
+        }
+        if(SNM.stage==='takeaway' && SNM.take.want!==null){
+            for(const t of SNM.plan.take) if(t.tk!==SNM.take.want &&
+                Math.hypot(W.x-t.door.x, W.z-t.door.z) < SNM_TUNE.doorReach){
+                SNM.prompt='SHE WANTS THE '+SNM_TAKEAWAYS[SNM.take.want].short+'!'; return; }
+        }
+        if(Math.hypot(W.x-CAR.x, W.z-CAR.z) < SNM_TUNE.carReach){
+            SNM.prompt = (SNM.girl.state==='follow' && !snmGirlClose()) ? 'WAIT FOR '+SNM_GIRL : 'E  GET IN';
+            SNM.promptCar=true; return;
+        }
+        return;
+    }
+    // in the car: nudge when you're near where you need to be
+    for(const t of targets){
+        if(Math.hypot(CAR.x-t.door.x, CAR.z-t.door.z) < 40){
+            SNM.prompt = Math.abs(CAR.speed) < SNM_TUNE.stopSpeed ? 'E  GET OUT' : 'STOP HERE';
+            return;
+        }
+    }
+}
+function snmGirlClose(){
+    const G=SNM.girl, W=SNM.walker;
+    return G && W && G.state==='follow' && Math.hypot(G.x-W.x, G.z-W.z) < 6;
+}
+
+// ── The action key: get out, get in, use a door ─────────────────────────────
+function snmAction(){
+    if(!SNM.active || SNM.screen) return;
+    const P=SNM.plan;
+    if(!SNM.onFoot){
+        if(Math.abs(CAR.speed) >= SNM_TUNE.stopSpeed) return;       // stop first
+        CAR.speed=0;
+        const yr=CAR.yaw*Math.PI/180, rx=Math.cos(yr), rz=-Math.sin(yr);
+        SNM.onFoot=true;
+        SNM.walker={ x:CAR.x+rx*2.2, z:CAR.z+rz*2.2, yaw:CAR.yaw, phase:0, moving:false };
+        if(SNM.stage==='home' && SNM.girl.state==='car'){       // she gets out at home
+            Object.assign(SNM.girl, { state:'follow', x:CAR.x-rx*3, z:CAR.z-rz*3, yaw:CAR.yaw, trail:[] });
+        }
+        // walker camera starts where the drive camera is, then eases in
+        return;
+    }
+    const W=SNM.walker;
+    // a door?
+    for(const t of snmTargets()){
+        if(Math.hypot(W.x-t.door.x, W.z-t.door.z) < SNM_TUNE.doorReach){
+            if(t.kind==='girl'){ SNM.legs.girl=snmTimerFrac('girl'); SNM.timer=null;
+                                 SNM.screen={ kind:'bell', t:0, phase:'wait' }; return; }
+            if(t.kind==='video'){ SNM.legs.video=snmTimerFrac('video'); SNM.timer=null;
+                                  const sold=new Set(SNM.plan.sellOrder.slice(0,SNM.sold));
+                                  SNM.screen={ kind:'video', t:0, sel:[1,0,2].find(i=>!sold.has(i)), phase:'pick', sold }; return; }
+            if(t.kind==='take'){
+                // She changes her mind at the first two, whichever you pick first:
+                // you end up at all three. Only the third one gets an order.
+                const TK=SNM.take; TK.visited.push(t.tk);
+                if(TK.visited.length<3){
+                    const left=[0,1,2].filter(k=>!TK.visited.includes(k));
+                    TK.want=left[(Math.random()*left.length)|0];
+                    SNM.screen={ kind:'take', t:0, sel:0, phase:'nope', tk:t.tk, next:TK.want, n:TK.visited.length };
+                } else SNM.screen={ kind:'take', t:0, sel:0, phase:'pick', tk:t.tk };
+                return;
+            }
+            if(t.kind==='home'){
+                if(!snmGirlClose()) return;
+                SNM.legs.cold = snmTimerFrac('cold'); SNM.timer=null; SNM.stage='done';
+                SNM.screen={ kind:'win', t:0 }; return;
+            }
+        }
+    }
+    // the car?
+    if(Math.hypot(W.x-CAR.x, W.z-CAR.z) < SNM_TUNE.carReach){
+        if(SNM.girl.state==='follow'){
+            if(!snmGirlClose()) return;
+            SNM.girl.state='car';
+        }
+        SNM.onFoot=false; SNM.walker=null;
+        snmSnapCam();
+    }
+}
+// Fraction of a leg's time left (for the end-of-night rating).
+function snmTimerFrac(kind){
+    const T=SNM.timer; if(!T || T.kind!==kind) return 0;
+    return Math.max(0, Math.min(1, T.left/T.total));
+}
+
+// ── On foot ─────────────────────────────────────────────────────────────────
+function snmWalk(){
+    const W=SNM.walker, T=SNM_TUNE;
+    let fwd=0, turn=0;
+    if(keys['w']||keys['arrowup'])    fwd+=1;
+    if(keys['s']||keys['arrowdown'])  fwd-=1;
+    if(keys['a']||keys['arrowleft'])  turn-=1;
+    if(keys['d']||keys['arrowright']) turn+=1;
+    const gp=snmPad();
+    if(gp){
+        const dz=v=>Math.abs(v)<0.2?0:v;
+        turn += dz(gp.axes[0]||0);
+        fwd  -= dz(gp.axes[1]||0);
+        if(gp.buttons[7] && gp.buttons[7].value>0.1) fwd = Math.max(fwd, gp.buttons[7].value);
+    }
+    fwd=Math.max(-1,Math.min(1,fwd)); turn=Math.max(-1,Math.min(1,turn));
+    W.yaw=((W.yaw + turn*T.walkTurn) % 360 + 360) % 360;
+    const sp = fwd>0 ? fwd*T.walkSpeed : fwd*T.walkSpeed*0.5;
+    const yr=W.yaw*Math.PI/180;
+    const nx=W.x+Math.sin(yr)*sp, nz=W.z+Math.cos(yr)*sp;
+    // walls: slide along them rather than walking through
+    if(!snmBlocked(nx, nz)){ W.x=nx; W.z=nz; }
+    else if(!snmBlocked(nx, W.z)) W.x=nx;
+    else if(!snmBlocked(W.x, nz)) W.z=nz;
+    W.moving = Math.abs(sp)>0.001 || Math.abs(turn)>0.1;
+    if(W.moving) W.phase++;
+
+    // she follows a few steps behind, along your path
+    const G=SNM.girl;
+    if(G && G.state==='follow'){
+        G.trail.push({x:W.x, z:W.z});
+        if(G.trail.length>60) G.trail.shift();
+        const tgt=G.trail[Math.max(0, G.trail.length-9)];
+        const dx=tgt.x-G.x, dz=tgt.z-G.z, d=Math.hypot(dx,dz);
+        const dw=Math.hypot(W.x-G.x, W.z-G.z);
+        if(d>0.3 && dw>1.3){
+            const s=Math.min(d, T.walkSpeed*1.15);
+            G.x+=dx/d*s; G.z+=dz/d*s; G.yaw=Math.atan2(dx,dz)*180/Math.PI; G.phase++; G.moving=true;
+        } else G.moving=false;
+    }
+
+    // walker camera: closer and lower than the car's
+    const back=5.5, up=2.6;
+    const tx=W.x-Math.sin(yr)*back, tz=W.z-Math.cos(yr)*back;
+    CAM.x+=(tx-CAM.x)*0.45; CAM.z+=(tz-CAM.z)*0.45;
+    const gy=groundHeightAt(W.x,W.z);
+    CAM.y+=(gy+up-CAM.y)*0.35;
+    const dyaw=((W.yaw-CAM.yaw+540)%360)-180;
+    CAM.yaw=(CAM.yaw+dyaw*0.3+360)%360;
+    CAM.pitch=-12;
+}
+function snmBlocked(x, z){
+    const idx=bucketsNear(BUILDING_BUCKETS, x, z, 24);
+    for(const bi of idx){
+        const B=BUILDINGS[bi];
+        const yaw=B[2]*Math.PI/180, cy=Math.cos(yaw), sy=Math.sin(yaw);
+        const HW=(B.length>6)?B[6]:5.0, DEP=(B.length>7)?B[7]:3.5;
+        const dx=x-B[0], dz=z-B[1];
+        const u=dx*cy-dz*sy, v=dx*sy+dz*cy;
+        if(Math.abs(u)<HW+0.35 && Math.abs(v)<DEP+0.35) return true;
+    }
+    return false;
+}
+
+// ── Gamepad (edge-triggered; runs inside the 20 Hz loop) ─────────────────────
+function snmPad(){
+    const pads=navigator.getGamepads ? navigator.getGamepads() : [];
+    for(const p of pads) if(p) return p;
+    return null;
+}
+function snmPadPoll(){
+    const gp=snmPad(); if(!gp) return;
+    const btn=i=>!!(gp.buttons[i] && gp.buttons[i].pressed);
+    const ax=gp.axes[0]||0, ay=gp.axes[1]||0;
+    const now={ act: btn(3)||btn(2), ok: btn(0)||btn(3)||btn(2), back: btn(1),
+                l: btn(14)||ax<-0.5, r: btn(15)||ax>0.5, u: btn(12)||ay<-0.5, d: btn(13)||ay>0.5 };
+    const was=SNM.pad||{};
+    const edge=k=>now[k] && !was[k];
+    if(SNM.screen){
+        if(edge('l')||edge('u')) snmScreenMove(-1);
+        if(edge('r')||edge('d')) snmScreenMove(1);
+        if(edge('ok')) snmScreenOk();
+        if(edge('back')) snmScreenBack();
+    } else if(edge('act')) snmAction();
+    SNM.pad=now;
+}
+
+// ── Keyboard: E / ENTER act; on a screen, arrows choose and E confirms ──────
+document.addEventListener('keydown', e=>{
+    if(!SNM.active || (typeof OPTS!=='undefined' && OPTS.open)) return;
+    const el=document.activeElement;
+    if(el && (el.tagName==='INPUT' || el.tagName==='TEXTAREA')) return;
+    if(gameEl.style.display==='none') return;
+    const k=e.key.toLowerCase();
+    if(SNM.screen){
+        if(k==='escape' && !snmScreenBack()) return;       // unhandled Esc → options
+        if(e.repeat){ e.preventDefault(); e.stopImmediatePropagation(); return; }
+        if(k==='arrowleft'||k==='a'||k==='arrowup'||k==='w')          snmScreenMove(-1);
+        else if(k==='arrowright'||k==='d'||k==='arrowdown'||k==='s')  snmScreenMove(1);
+        else if(k==='e'||k==='enter'||k===' ')                        snmScreenOk();
+        e.preventDefault(); e.stopImmediatePropagation();
+        return;
+    }
+    if((k==='e'||k==='enter') && !e.repeat){ e.preventDefault(); snmAction(); }
+}, true);
+// Mouse / tap on the drive view while a screen is up = choose / confirm.
+canvas.addEventListener('click', ev=>{
+    if(!SNM.active || !SNM.screen) return;
+    const r=canvas.getBoundingClientRect();
+    const x=(ev.clientX-r.left)*(W/r.width), y=(ev.clientY-r.top)*(H/r.height);
+    snmScreenClick(x, y);
+});
+
+// ── Things she says when you mount the kerb (once per excursion) ────────────
+const SNM_GRUMBLES = ['WATCH THE KERB!', 'MIND THE GARDEN!', 'ARE YOU MAD?!',
+                      'THAT WAS A HEDGE!', 'I JUST DID MY HAIR!', 'OI! THE ROAD!'];
+function snmSay(text, frames){ SNM.msg={ text, t:frames||50 }; }
+
+// ── Sprites (9 px wide; 12 body rows + 6 leg rows) ──────────────────────────
+const SNM_SPR = {
+  man: {
+    pal:{ K:[0,0,0], W:[0xFF,0xFF,0xFF], B:[0,0,0xC0] },
+    back:["...KKK...","..KKKKK..","..KKKKK..","...KKK...","..KKKKK..",".KKKKKKK.",
+          ".KKKKKKK.",".KKKKKKK.",".KKKKKKK.",".WKKKKKW.","...BBB...","...BBB..."],
+    front:["...KKK...","..KKKKK..","..WWWWW..","..WKWKW..","...WWW...",".KKWWWKK.",
+          ".KKKWKKK.",".KKKWKKK.",".KKKKKKK.",".WKKKKKW.","...BBB...","...BBB..."],
+    side:["...KKK...","..KKKKW..","..KKKWW..","...KKW...","...KKK...","..KKKKK..",
+          "..KKKKK..","..KKKKK..","..KKWKK..","...KWK...","...BBB...","...BBB..."],
+    leg:'B',
+  },
+  girl: {
+    pal:{ K:[0,0,0], W:[0xFF,0xFF,0xFF], Y:[0xFF,0xFF,0], M:[0xFF,0,0xFF] },
+    back:["..YYYYY..",".YYYYYYY.",".YYYYYYY.",".YYYYYYY.","..YMMMY..",".MMMMMMM.",
+          ".MMMMMMM.",".WMMMMMW.","..MMMMM..",".MMMMMMM.",".MMMMMMM.","MMMMMMMMM"],
+    front:["..YYYYY..",".YYYYYYY.",".YWWWWWY.",".YWKWKWY.",".YYWWWYY.","..YMMMY..",
+          ".MMMMMMM.",".WMMMMMW.","..MMMMM..",".MMMMMMM.",".MMMMMMM.","MMMMMMMMM"],
+    side:["..YYYY...",".YYYYYW..",".YYYYWW..",".YYYYW...","..YMMM...","..MMMMM..",
+          "..MMMMM..","..MMWMM..","..MMMMM..",".MMMMMM..",".MMMMMMM.","MMMMMMMM."],
+    leg:'K',
+  },
+};
+// Leg rows: front/back views step in place; side views stride.
+function snmLegs(view, frame, c){
+    const L=s=>s.replace(/L/g,c);
+    if(view==='side'){
+        return frame%2===0
+            ? ["...LL....","...LL....","...LL....","...LL....","...LL....","...KKK..."].map(L)
+            : ["...LL....","..L..L...","..L..L...",".L....L..",".L....L..","KK....KK."].map(L);
+    }
+    const f=[0,1,0,2][frame%4];
+    if(f===0) return ["...L.L...","...L.L...","...L.L...","...L.L...","...L.L...","..KK.KK.."].map(L);
+    if(f===1) return ["...L.L...","...L.L...","...L.L...","...L.K...","...L.....","..KK....."].map(L);
+    return           ["...L.L...","...L.L...","...L.L...","...K.L...",".....L...",".....KK.."].map(L);
+}
+// Pick the view (back / front / side, mirrored for left) from the figure's
+// heading relative to the camera, then assemble body + legs.
+function snmFigure(kind, yaw, phase, moving){
+    const S=SNM_SPR[kind];
+    const rel=((yaw-CAM.yaw+540)%360)-180;
+    let view='back', flip=false;
+    if(Math.abs(rel)>135) view='front';
+    else if(Math.abs(rel)>45){ view='side'; flip = rel<0; }
+    const frame = moving ? Math.floor(phase/3) : 0;
+    return { rows:S[view].concat(snmLegs(view, frame, S.leg)), pal:S.pal, flip };
+}
+// Nearest-neighbour scaled blit; (cx, by) = bottom-centre on screen.
+function snmBlit(rows, pal, cx, by, sc, flip){
+    const h=rows.length, w=rows[0].length;
+    const dw=Math.max(1,Math.round(w*sc)), dh=Math.max(1,Math.round(h*sc));
+    const x0=Math.round(cx-dw/2), y0=Math.round(by-dh);
+    for(let y=0;y<dh;y++){
+        const row=rows[Math.min(h-1,(y/sc)|0)];
+        for(let x=0;x<dw;x++){
+            let sx=Math.min(w-1,(x/sc)|0); if(flip) sx=w-1-sx;
+            const c=row[sx]; if(c==='.') continue;
+            px(x0+x, y0+y, pal[c]);
+        }
+    }
+}
+function snmBlitFrame(fr, cx, by, sc){
+    const dw=Math.max(1,Math.round(fr.w*sc)), dh=Math.max(1,Math.round(fr.h*sc));
+    const x0=Math.round(cx-dw/2), y0=Math.round(by-dh);
+    for(let y=0;y<dh;y++){
+        const sy=Math.min(fr.h-1,(y/sc)|0);
+        for(let x=0;x<dw;x++){
+            const c=fr.px[sy*fr.w + Math.min(fr.w-1,(x/sc)|0)];
+            if(c===0) continue;
+            px(x0+x, y0+y, __colFor(c));
+        }
+    }
+}
+const SNM_PERSON_WU = 2.1;   // a person's drawn height (world units; ~2× life so they read)
+const SNM_CAR_WU    = 3.4;   // the parked car's drawn width (world units)
+
+// World-space sprites while you're on foot: you, her (if she's with you) and the
+// parked car. Sorted far → near. Drawn inside the play-window clip.
+function snmDrawFigures(){
+    const items=[];
+    const add=(x,z,draw)=>{
+        const gy=groundHeightAt(x,z);
+        const c=toCamera(x, gy, z);
+        if(c.cz<=0.6) return;
+        const p=projectCam(c);
+        items.push({ cz:c.cz, p, draw });
+    };
+    // the parked car
+    add(CAR.x, CAR.z, (p,cz)=>{
+        const rel=((CAR.yaw-CAM.yaw+540)%360)-180;
+        let a=((-rel)%360+360)%360;
+        const fr=CAR_TURN[Math.round(a/10)%36];
+        snmBlitFrame(fr, p.sx, p.sy, (SNM_CAR_WU/26)*FOCAL/cz);
+    });
+    const W=SNM.walker;
+    if(W) add(W.x, W.z, (p,cz)=>{
+        const f=snmFigure('man', W.yaw, W.phase, W.moving);
+        snmBlit(f.rows, f.pal, p.sx, p.sy, (SNM_PERSON_WU/18)*FOCAL/cz, f.flip);
+    });
+    const G=SNM.girl;
+    if(G && G.state==='follow') add(G.x, G.z, (p,cz)=>{
+        const f=snmFigure('girl', G.yaw, G.phase, G.moving);
+        snmBlit(f.rows, f.pal, p.sx, p.sy, (SNM_PERSON_WU*0.95/18)*FOCAL/cz, f.flip);
+    });
+    items.sort((a,b)=>b.cz-a.cz);
+    for(const it of items) it.draw(it.p, it.cz);
+}
+
+// A bobbing arrow (and a name tag) above each place you're heading for, so you
+// can find it from a distance. Drawn over the buildings.
+const SNM_ARROW = ["KKKKKKKKK","KCCCCCCCK",".KCCCCCK.","..KCCCK..","...KCK...","....K...."];
+function snmDrawBeacons(){
+    for(const t of snmTargets()){
+        const B=BUILDINGS[t.bi]; if(!B) continue;
+        const gy=(BUILDING_GY[t.bi]!==undefined) ? BUILDING_GY[t.bi] : groundHeightAt(B[0],B[1]);
+        const c=toCamera(B[0], gy+B[3]+2.5, B[1]);
+        if(c.cz<=1 || c.cz>900) continue;
+        const p=projectCam(c);
+        const bob=Math.round(Math.sin(SNM.t*0.35)*1.5);
+        if(p.sy < 36) p.sy = 36;           // keep it clear of the HUD strip
+        const pal={ K:[0,0,0], C: (SNM.t>>2)&1 ? t.col : [0xFF,0xFF,0xFF] };
+        snmBlit(SNM_ARROW, pal, p.sx, p.sy+bob, 1, false);
+        const lab=t.label, w=lab.length*4+1;
+        const lx=Math.round(p.sx-w/2), ly=Math.round(p.sy+bob-6-8);
+        snmRect(lx-1, ly-1, w+1, 7, [0,0,0]);
+        _text35(lab, lx+1, ly, t.col);
+    }
+}
+// Doors on tonight's buildings: a coloured door on the road-facing wall.
+// Called from drawBuildings() so it depth-sorts with the walls.
+function snmDoorFaces(st, gy, faces, keep){
+    const d=st.door;
+    const vx=CAM.x-d.fx, vz=CAM.z-d.fz;
+    if(vx*d.nx+vz*d.nz <= 0) return;               // wall faces away from us
+    const tx=-d.nz, tz=d.nx, hw=Math.min(0.6, d.half*0.4), ht=1.9, o=0.06;
+    const bx=d.fx+d.nx*o, bz=d.fz+d.nz*o;
+    const cam=[
+        toCamera(bx-tx*hw, gy,    bz-tz*hw), toCamera(bx+tx*hw, gy,    bz+tz*hw),
+        toCamera(bx+tx*hw, gy+ht, bz+tz*hw), toCamera(bx-tx*hw, gy+ht, bz-tz*hw) ];
+    const clipped=clipNear(cam); if(clipped.length<3) return;
+    let far=0; for(const c of clipped) if(c.cz>far) far=c.cz;
+    faces.push({ scr:projectPolyToScreen(clipped), col:st.col, depth:far-0.05, keep });
+}
+
+// ── HUD (drawn into the 256×192 buffer after the dashboard) ────────────────
+function snmRect(x,y,w,h,c){ for(let j=0;j<h;j++) for(let i=0;i<w;i++) px(x+i,y+j,c); }
+// ZX 8×8 text straight into the buffer. paper null = transparent. sc = pixel scale.
+function snmText8(str, x, y, ink, paper, sc){
+    sc=sc||1; str=String(str).toUpperCase();
+    for(let i=0;i<str.length;i++){
+        const g=ZXFONT[str[i]]||ZXFONT[' '];
+        for(let r=0;r<8;r++) for(let b=0;b<8;b++){
+            const on=(g[r]>>(7-b))&1;
+            if(!on && !paper) continue;
+            const c=on?ink:paper;
+            for(let yy=0;yy<sc;yy++) for(let xx=0;xx<sc;xx++) px(x+(i*8+b)*sc+xx, y+r*sc+yy, c);
+        }
+    }
+}
+function snmText8C(str, y, ink, paper, sc, x0, x1){   // centred between x0..x1
+    sc=sc||1; x0=x0||0; x1=(x1===undefined)?W:x1;
+    const w=String(str).length*8*sc;
+    snmText8(str, Math.round(x0+((x1-x0)-w)/2), y, ink, paper, sc);
+}
+function snmClock(s){ s=Math.max(0,Math.ceil(s)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+const SNM_OBJECTIVE = { girl:'PICK UP '+SNM_GIRL, video:'GET TO THE VIDEO SHOP',
+                        takeaway:'PICK A TAKEAWAY', home:'HOME BEFORE IT GOES COLD' };
+const SNM_TIMER_LABEL = { girl:"SHE'S WAITING", video:'SELLING OUT', cold:'GOING COLD' };
+function snmDrawHUD(){
+    resetClip();
+    const K=[0,0,0], Wh=[0xFF,0xFF,0xFF], Yl=[0xFF,0xFF,0], Rd=[0xFF,0,0], Gn=[0,0xFF,0];
+    snmRect(0,0,VIEW_X1+1,21,K);
+    let obj=SNM_OBJECTIVE[SNM.stage]||'';
+    if(SNM.stage==='takeaway' && SNM.take && SNM.take.want!==null) obj='GET TO THE '+SNM_TAKEAWAYS[SNM.take.want].short;
+    snmText8(obj, 3, 2, Yl, null);
+    // compass: points at the nearest target, relative to where you're looking
+    const tg=snmTargets(); const me=SNM.onFoot?SNM.walker:CAR;
+    if(tg.length && me){
+        let best=tg[0], bd=Infinity;
+        for(const t of tg){ const d=Math.hypot(t.door.x-me.x,t.door.z-me.z); if(d<bd){bd=d;best=t;} }
+        const ang=(Math.atan2(best.door.x-me.x, best.door.z-me.z)*180/Math.PI - CAM.yaw)*Math.PI/180;
+        const cx=207, cy=7, dx=Math.sin(ang), dy=-Math.cos(ang);
+        for(let i=-4;i<=5;i++) px(cx+dx*i, cy+dy*i, best.col);
+        for(const s of [-1,1]){           // arrow head
+            const hx=Math.sin(ang+s*2.5), hy=-Math.cos(ang+s*2.5);
+            for(let i=0;i<=3;i++) px(cx+dx*5+hx*i, cy+dy*5+hy*i, best.col);
+        }
+        // distance BY ROAD (refreshed twice a second; walking stays straight-line)
+        if(!SNM.onFoot){
+            if(!SNM.rd || SNM.t-SNM.rd.t>=10 || SNM.rd.to!==best){
+                SNM.rd={ t:SNM.t, to:best, d:snmRouteDist({x:me.x,z:me.z}, best.door) }; }
+            bd=SNM.rd.d;
+        }
+        const m=Math.round(bd/SCALE);
+        const dtxt = m>=1000 ? (m/1000).toFixed(1)+'KM' : m+'M';
+        _text35(dtxt, 207-Math.round((dtxt.length*4-1)/2), 14, Wh);
+    }
+    // timer
+    if(SNM.timer){
+        const T=SNM.timer, low=T.left<15;
+        _text35(SNM_TIMER_LABEL[T.kind]||'', 3, 13, Wh);
+        const tl=(SNM_TIMER_LABEL[T.kind]||'').length*4+4;
+        snmText8(snmClock(T.left), 3+tl, 11, (low && (SNM.t>>2)&1) ? Rd : Wh, null);
+        if(T.kind==='video') _text35((3-SNM.sold)+' LEFT', 3+tl+36, 13, (3-SNM.sold)===1 ? Rd : Yl);
+    }
+    // stress (only once she's with you)
+    if(SNM.girl && SNM.girl.state!=='home'){
+        const n=Math.ceil(SNM.stress/10);
+        _text35('STRESS', 114, 13, Wh);
+        for(let i=0;i<10;i++){
+            const x=140+i*5, on=i<n, hot=i>=7;
+            const c = on ? (hot ? Rd : (i>=4 ? Yl : Gn)) : [0x40,0x40,0x40];
+            snmRect(x, 12, 4, 7, c);
+        }
+    }
+    // bottom prompt / message strip, just above the dashboard
+    let line=SNM.prompt, ink=((SNM.t>>2)&1)?Yl:Wh;
+    if(!line && SNM.msg && SNM.msg.t>0){ line=SNM.msg.text; ink=Wh; }
+    if(SNM.msg && SNM.msg.t>0) SNM.msg.t--;
+    if(line){
+        snmRect(0, 86, VIEW_X1+1, 10, K);
+        snmText8C(line, 87, ink, null, 1, 0, VIEW_X1+1);
+    }
+}
+// Minimap: tonight's stops (current ones flash) and the car when you're walking.
+function snmDrawMinimap(M){
+    if(!SNM.active || !SNM.plan) return;
+    const P=SNM.plan, cur=new Set(snmTargets());
+    const hex=c=>'rgb('+c.join(',')+')';
+    for(const s of [P.home, P.girl, P.video, ...P.take]){
+        const m=M(s.door.x, s.door.z), on=cur.has(s);
+        if(!on && s.kind!=='home') continue;
+        const sz = on ? 7 : 5;
+        if(on && (SNM.t>>2)&1){ mctx.fillStyle='#fff'; mctx.fillRect(m.x-sz/2-1,m.y-sz/2-1,sz+2,sz+2); }
+        mctx.fillStyle=hex(s.col); mctx.fillRect(m.x-sz/2,m.y-sz/2,sz,sz);
+        if(on){ mctx.font='9px monospace'; mctx.textAlign='left'; mctx.textBaseline='middle';
+                mctx.lineWidth=3; mctx.strokeStyle='#000'; mctx.strokeText(s.label, m.x+6, m.y);
+                mctx.fillStyle=hex(s.col); mctx.fillText(s.label, m.x+6, m.y); }
+    }
+    if(SNM.onFoot && SNM.walker){
+        const w=M(SNM.walker.x, SNM.walker.z);
+        mctx.fillStyle='#ff0'; mctx.beginPath(); mctx.arc(w.x,w.y,3,0,Math.PI*2); mctx.fill();
+    }
+}
+
+// ── Static screens: briefing, doorbell, video shop, takeaway, win / fail ────
+// Each is a full 256×192 Spectrum screen drawn into the pixel buffer. The drive
+// loop is frozen while one is up (timers too: the clock only ever stops at a
+// finish line, and the next leg's clock starts when you leave).
+const ZC = { K:[0,0,0], B:[0,0,0xC0], R:[0xC0,0,0], M:[0xC0,0,0xC0], G:[0,0xC0,0], C:[0,0xC0,0xC0],
+             Y:[0xC0,0xC0,0], Wd:[0xC0,0xC0,0xC0], BB:[0,0,0xFF], BR:[0xFF,0,0], BM:[0xFF,0,0xFF],
+             BG:[0,0xFF,0], BC:[0,0xFF,0xFF], BY:[0xFF,0xFF,0], W:[0xFF,0xFF,0xFF], GR:[0xA8,0xA8,0xA8] };
+function snmChequer(x,y,w,h,c1,c2,cell){
+    cell=cell||1;
+    for(let j=0;j<h;j++) for(let i=0;i<w;i++)
+        px(x+i, y+j, ((((x+i)/cell)|0)+(((y+j)/cell)|0))&1 ? c1 : c2);
+}
+function snmFrame(x,y,w,h,c,t){ t=t||1;
+    snmRect(x,y,w,t,c); snmRect(x,y+h-t,w,t,c); snmRect(x,y,t,h,c); snmRect(x+w-t,y,t,h,c); }
+function snmBand(y, text, ink, paper){ snmRect(0,y,W,8,paper||ZC.K); if(text) snmText8C(text, y, ink||ZC.W, null); }
+const snmFlash = ()=>(SNM.t>>3)&1;
+
+function snmScreenTick(){
+    const S=SNM.screen;
+    if(S.kind==='bell' && S.phase==='ding' && S.t>=28){ S.phase='open'; S.t=0; }
+}
+function snmScreenMove(d){
+    const S=SNM.screen; if(!S) return;
+    if(S.kind==='video' && S.phase==='pick'){ do { S.sel=(S.sel+d+3)%3; } while(S.sold && S.sold.has(S.sel)); }
+    if(S.kind==='take'  && S.phase==='pick') S.sel=(S.sel+d+3)%3;
+}
+function snmScreenOk(){
+    const S=SNM.screen; if(!S) return;
+    const P=SNM.plan;
+    switch(S.kind){
+    case 'brief':   snmBegin(); snmSay('PICK UP '+SNM_GIRL+'!', 60); break;
+    case 'noplace': snmQuit(); break;
+    case 'bell':
+        if(S.phase==='wait'){ S.phase='ding'; S.t=0; snmDingDong(); }
+        else if(S.phase==='open'){
+            Object.assign(SNM.girl, { state:'follow', x:P.girl.door.x, z:P.girl.door.z,
+                                      yaw:SNM.walker?SNM.walker.yaw:0, trail:[] });
+            SNM.stage='video';
+            SNM.screen=null; snmStartTimer('video', P.route.video);
+        }
+        break;
+    case 'video':
+        if(S.phase==='pick'){ SNM.choice.video=S.sel; S.phase='paid'; S.t=0; }
+        else { SNM.stage='takeaway'; SNM.screen=null; snmSay('NOW FOR A TAKEAWAY', 60); }
+        break;
+    case 'take':
+        if(S.phase==='nope'){ SNM.screen=null; snmSay('OFF TO THE '+SNM_TAKEAWAYS[S.next].short+' THEN', 60); }
+        else if(S.phase==='pick'){ SNM.choice.take=S.tk; SNM.choice.dish=S.sel; S.phase='ready'; S.t=0; }
+        else {
+            SNM.stage='home';
+            const here=P.take.find(t=>t.tk===S.tk);
+            SNM.screen=null; snmStartTimer('cold', snmRouteDist(here.door, P.home.door));
+        }
+        break;
+    case 'win':  snmStart(); if(SNM.plan) snmBegin(); break;     // another night, new places
+    case 'fail': snmBegin(); break;                              // same night, try again
+    }
+}
+// Esc on a screen. Returns true if handled (else the options screen opens).
+function snmScreenBack(){
+    const S=SNM.screen; if(!S) return false;
+    if(S.kind==='brief' || S.kind==='noplace' || S.kind==='win' || S.kind==='fail'){ snmQuit(); return true; }
+    return false;
+}
+function snmScreenClick(x, y){
+    const S=SNM.screen; if(!S) return;
+    if(S.kind==='video' && S.phase==='pick'){
+        let i;
+        if(SNM_VIDEO_PX){                               // click a tape in the artwork
+            i=SNM_VIDEO_TAPES.findIndex(r=>x>=r.x-2 && x<r.x+r.w+2 && y>=r.y-2);
+            if(i<0){ if(x>=158 && y>=146) snmScreenOk(); return; }
+        } else i = x<85 ? 0 : x<171 ? 1 : 2;
+        if(S.sold && S.sold.has(i)) return;
+        if(i!==S.sel){ S.sel=i; return; }
+    }
+    if(S.kind==='take' && S.phase==='pick'){
+        const img=!!SNM_TAKE_PX[SNM_TAKEAWAYS[S.tk].key];
+        const i=img ? Math.floor((y-SNM_TAKE_ROW0+2)/SNM_TAKE_ROWH) : Math.floor((y-36)/14);
+        if(i>=0 && i<3 && i!==S.sel){ S.sel=i; return; }
+    }
+    snmScreenOk();
+}
+// A two-tone "ding dong" on the same WebAudio the tape loader uses (best-effort).
+function snmDingDong(){
+    try{
+        const AC=window.AudioContext||window.webkitAudioContext; if(!AC) return;
+        const ac=snmDingDong.ac||(snmDingDong.ac=new AC());
+        const note=(f,t0,dur)=>{ const o=ac.createOscillator(), g=ac.createGain();
+            o.type='square'; o.frequency.value=f; g.gain.setValueAtTime(0.08, ac.currentTime+t0);
+            g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime+t0+dur);
+            o.connect(g); g.connect(ac.destination); o.start(ac.currentTime+t0); o.stop(ac.currentTime+t0+dur); };
+        note(784,0,0.5); note(622,0.45,0.8);
+    }catch(e){}
+}
+
+function snmRenderScreen(){
+    resetClip();
+    snmRect(0,0,W,H,ZC.K);
+    const S=SNM.screen;
+    ({ brief:snmScrBrief, noplace:snmScrNoPlace, bell:snmScrBell, video:snmScrVideo,
+       take:snmScrTake, win:snmScrWin, fail:snmScrFail })[S.kind](S);
+}
+
+function snmScrBrief(){
+    snmText8C('SATURDAY NIGHT', 6, ZC.BY, null, 2);
+    snmText8C('THE STREETS ARE CLEAN. NOW', 28, ZC.W, null);
+    snmText8C('FOR A NIGHT IN WITH '+SNM_GIRL+'.', 38, ZC.W, null);
+    const rows=[[SNM_COL.girl,'PICK UP '+SNM_GIRL+'. ON TIME!'],
+                [SNM_COL.video,'GET A VIDEO BEFORE THEY GO'],
+                [ZC.BR,'A TAKEAWAY SHE FANCIES...'],
+                [SNM_COL.home,'HOME BEFORE IT GOES COLD']];
+    rows.forEach(([c,t],i)=>{ const y=56+i*12; snmRect(6,y,6,7,c); snmText8(t, 18, y, ZC.W, null); });
+    snmText8C('STAY ON THE ROAD WITH HER IN', 108, ZC.BY, null);
+    snmText8C('THE CAR. KERBS STRESS HER OUT', 118, ZC.BY, null);
+    snmText8C('E OR PAD Y: GET OUT, GET IN', 136, ZC.C, null);
+    snmText8C('AND USE DOORS', 146, ZC.C, null);
+    snmText8C('ARROWS OR WASD: DRIVE, WALK', 156, ZC.C, null);
+    if(snmFlash()) snmText8C('PRESS E TO START', 174, ZC.K, ZC.BY);
+    _text35('ESC  BACK TO CRUISING', 3, 186, ZC.GR);
+}
+function snmScrNoPlace(S){
+    snmText8C('NO NIGHT LIFE', 8, ZC.BR, null, 2);
+    const L=['SATURDAY NIGHT NEEDS 4 SHOPS','AND 2 HOUSES NEAR THE ROADS.','',
+             'THIS MAP HAS '+S.shops+' SHOPS','AND '+S.houses+' HOUSES.','',
+             'PAINT SHOPS AND HOUSES ON THE','SCENERY PAGE, THEN BUILD.'];
+    L.forEach((t,i)=>snmText8C(t, 44+i*11, ZC.W, null));
+    if(snmFlash()) snmText8C('PRESS E', 172, ZC.K, ZC.BY);
+}
+
+function snmScrBell(S){
+    // brick wall
+    for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+        const course=(y/6)|0, off=(course&1)?6:0;
+        px(x,y, (y%6===5 || (x+off)%12===11) ? ZC.K : ZC.R);
+    }
+    snmBand(0, SNM_GIRL+"'S HOUSE", ZC.BY);
+    const open=S.phase==='open';
+    snmRect(86,34,84,146,ZC.W);                        // frame
+    snmRect(90,38,76,142, open?ZC.K:ZC.B);             // door (or the hall)
+    if(!open){
+        snmChequer(94,40,68,14,ZC.W,ZC.C);             // frosted fanlight
+        snmText8C('23', 43, ZC.K, null, 1, 90, 166);
+        for(const [x,y] of [[96,60],[132,60],[96,122],[132,122]]) snmFrame(x,y,28,50,ZC.K);
+        snmRect(112,114,32,4,ZC.BY); snmFrame(112,114,32,4,ZC.K);   // letterbox
+        snmRect(157,114,4,4,ZC.BY);                                 // knob
+    } else {
+        const f=snmFigure('girl', CAM.yaw+180, 0, false);
+        snmBlit(f.rows, f.pal, 128, 180, 4, false);
+    }
+    snmRect(76,180,104,4,ZC.GR);                       // doorstep
+    snmRect(182,98,12,18,ZC.W); snmFrame(182,98,12,18,ZC.K);   // bell push
+    snmRect(186,105,4,4, (S.phase==='ding' && snmFlash()) ? ZC.BR : ZC.BY);
+    if(S.phase==='ding'){
+        snmRect(0,12,W,20,ZC.K);
+        snmText8C('DING DONG!', 14, snmFlash()?ZC.BY:ZC.W, null, 2);
+    }
+    if(open){
+        const early=(SNM.legs.girl||0) > 0.5;
+        const line = early ? "YOU'RE EARLY! THAT'S A FIRST." : 'ABOUT TIME! COME ON THEN.';
+        snmRect(4,12,248,14,ZC.W); snmFrame(4,12,248,14,ZC.K);
+        snmText8C(line, 15, ZC.K, null);
+        snmRect(120,26,6,6,ZC.W);                      // bubble tail
+    }
+    snmBand(184, S.phase==='wait' ? 'PRESS E TO RING THE BELL' : open ? 'PRESS E TO GO' : '', ZC.BY);
+}
+
+// ── Video shop artwork (owner-supplied 256×192 Spectrum screen, S25c) ─────
+// One-line blob: never retype it. Decoded once into SNM_VIDEO_PX; until it has
+// loaded (or if it ever fails) the hand-drawn shop below is used instead.
+const SNM_VIDEO_IMG_B64 = 'data:image/png;base64,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';
+// The three new-release tapes in the artwork (x, y, w, h in screen pixels).
+const SNM_VIDEO_TAPES = [ {x:10,y:119,w:48,h:73}, {x:61,y:116,w:43,h:76}, {x:107,y:116,w:43,h:76} ];
+let SNM_VIDEO_PX = null;
+(function(){
+    const im=new Image();
+    im.onload=()=>{ try{ const c=document.createElement('canvas'); c.width=256; c.height=192;
+        const g=c.getContext('2d'); g.drawImage(im,0,0); SNM_VIDEO_PX=g.getImageData(0,0,256,192).data; }catch(e){} };
+    im.src=SNM_VIDEO_IMG_B64;
+})();
+function snmScrVideo(S){
+    if(!SNM_VIDEO_PX) return snmScrVideoDrawn(S);
+    D.set(SNM_VIDEO_PX);                                    // the shop
+    SNM_VIDEO_TAPES.forEach((r,i)=>{
+        if(S.sold && S.sold.has(i)){                        // dim it and stamp it
+            for(let y=r.y;y<r.y+r.h;y++) for(let x=r.x;x<r.x+r.w;x++) if((x+y)&1) px(x,y,ZC.K);
+            const cy=r.y+Math.round(r.h/2)-10;
+            snmRect(r.x-1,cy,r.w+2,20,ZC.BR); snmFrame(r.x-1,cy,r.w+2,20,ZC.W);
+            snmText8C('SOLD', cy+2, ZC.W, null, 1, r.x, r.x+r.w);
+            snmText8C('OUT',  cy+11, ZC.W, null, 1, r.x, r.x+r.w);
+        }
+        if(i===S.sel && S.phase==='pick'){
+            const c=snmFlash()?ZC.W:ZC.BY;
+            snmFrame(r.x-2,r.y-2,r.w+4,Math.min(192-(r.y-2),r.h+4),c,2);
+        }
+    });
+    // info panel on the floor, bottom right
+    const v=SNM_VIDEOS[S.sel], left=3-(S.sold?S.sold.size:0);
+    snmRect(158,146,98,46,ZC.K); snmFrame(158,146,98,46,ZC.BY);
+    v.lines.forEach((t,j)=>snmText8C(t, 149+j*9, ZC.W, null, 1, 158, 256));
+    _text35(left===1 ? 'LAST FILM LEFT!' : left+' FILMS LEFT', 162, 177, left===1?ZC.BR:ZC.BY);
+    _text35(S.phase==='pick' ? 'ARROWS  E: RENT IT' : 'PRESS E', 162, 184, ZC.W);
+    if(S.phase==='paid'){
+        snmRect(28,58,200,72,ZC.W); snmFrame(28,58,200,72,ZC.K,2);
+        snmText8C('ONE NIGHT HIRE. \u00a32', 68, ZC.K, null);
+        snmText8C('BE KIND, REWIND!', 84, ZC.R, null);
+        snmText8C("TA. HAVE A GOOD NIGHT.", 104, ZC.K, null);
+    }
+}
+function snmScrVideoDrawn(S){
+    snmRect(0,0,W,H,ZC.B);
+    snmBand(0, 'VIDEO VAULT * NEW RELEASES', ZC.BY);
+    // back shelves of tapes (a fixed pseudo-random run of spines)
+    const rnd=mulberry32(1986), cols=[ZC.R,ZC.M,ZC.G,ZC.C,ZC.Y,ZC.W,ZC.K,ZC.BR,ZC.BY];
+    for(let x=2;x<W-6;x+=6) snmRect(x,14,5,24,cols[(rnd()*cols.length)|0]);
+    snmRect(0,38,W,3,ZC.BY);
+    // the three new releases
+    const X=[6,92,178];
+    SNM_VIDEOS.forEach((v,i)=>{
+        const x=X[i], y=48;
+        const gone = S.sold && S.sold.has(i);
+        if(i===S.sel && S.phase==='pick') snmFrame(x-3,y-3,78,98, snmFlash()?ZC.W:ZC.BY, 2);
+        if(gone){                                   // empty box on the shelf
+            snmChequer(x,y,72,92,ZC.K,ZC.B,1); snmFrame(x,y,72,92,ZC.K,2);
+            _text35(v.genre, x+Math.round((72-(v.genre.length*4-1))/2), y+5, ZC.GR);
+            v.lines.forEach((t,j)=>snmText8C(t, y+54+j*9, ZC.GR, null, 1, x, x+72));
+            snmRect(x-2,y+30,76,14,ZC.BR); snmFrame(x-2,y+30,76,14,ZC.W);
+            snmText8C('SOLD OUT', y+33, ZC.W, null, 1, x, x+72);
+            return;
+        }
+        snmRect(x,y,72,92,v.box); snmFrame(x,y,72,92, i===0?ZC.BR:ZC.K, 2);
+        _text35(v.genre, x+Math.round((72-(v.genre.length*4-1))/2), y+5, v.ink);
+        snmVideoIcon(v.icon, x+36, y+30, v);
+        v.lines.forEach((t,j)=>snmText8C(t, y+54+j*9, v.ink, null, 1, x, x+72));
+        snmRect(x+4,y+83,64,7,ZC.BR); _text35('LAST COPY', x+18, y+84, ZC.W);
+    });
+    // chequered lino
+    snmChequer(0,146,W,38,ZC.K,ZC.W,8);
+    const v=SNM_VIDEOS[S.sel];
+    snmRect(0,146,W,10,ZC.K); snmText8C(v.title, 147, ZC.W, null);
+    if(S.phase==='paid'){
+        snmRect(28,58,200,72,ZC.W); snmFrame(28,58,200,72,ZC.K,2);
+        snmText8C('ONE NIGHT HIRE. £2', 68, ZC.K, null);
+        snmText8C('BE KIND, REWIND!', 84, ZC.R, null);
+        snmText8C("TA. HAVE A GOOD NIGHT.", 104, ZC.K, null);
+    }
+    snmBand(184, S.phase==='pick' ? 'LEFT/RIGHT CHOOSE  E: RENT IT' : 'PRESS E', ZC.BY);
+}
+// Plain genre motifs (no film artwork): eyes in the dark, a grin, a heart.
+function snmVideoIcon(kind, cx, cy, v){
+    if(kind==='eyes'){
+        for(const s of [-1,1]) for(let y=-3;y<=3;y++) for(let x=-6;x<=6;x++)
+            if((x*x)/36+(y*y)/9<=1) px(cx+s*10+x, cy+y, (Math.abs(x)<2)?ZC.K:v.ink);
+    } else if(kind==='grin'){
+        for(let a=0;a<=Math.PI;a+=0.02){ for(let r=13;r<=15;r++) px(cx+Math.cos(a)*r, cy-2+Math.sin(a)*r*0.7, ZC.K); }
+        for(const s of [-1,1]) snmRect(cx+s*8-2, cy-12, 4, 5, ZC.K);
+    } else {
+        for(let y=-12;y<=12;y++) for(let x=-14;x<=14;x++){
+            const X=x/12, Y=-y/12+0.25, q=X*X+Y*Y-1;
+            if(q*q*q - X*X*Y*Y*Y <= 0) px(cx+x, cy+y, ZC.W);
+        }
+    }
+}
+
+// ── Takeaway artwork (S25d): one 256×192 picture per takeaway ──────────────
+// Three one-line blobs: never retype them. Decoded once into SNM_TAKE_PX; the
+// hand-drawn shop (snmScrTakeDrawn) is used until they load, or if one fails.
+const SNM_TAKE_IMG_CHIPPY  = 'data:image/png;base64,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';
+const SNM_TAKE_IMG_CHINESE = 'data:image/png;base64,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';
+const SNM_TAKE_IMG_INDIAN  = 'data:image/png;base64,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';
+const SNM_TAKE_PX = {};
+(function(){
+    for(const [key,src] of [['chippy',SNM_TAKE_IMG_CHIPPY],['chinese',SNM_TAKE_IMG_CHINESE],['indian',SNM_TAKE_IMG_INDIAN]]){
+        const im=new Image();
+        im.onload=()=>{ try{ const c=document.createElement('canvas'); c.width=256; c.height=192;
+            const g=c.getContext('2d'); g.drawImage(im,0,0); SNM_TAKE_PX[key]=g.getImageData(0,0,256,192).data; }catch(e){} };
+        im.src=src;
+    }
+})();
+// Menu / dialogue panel over the bottom of the picture: rows at y 146,158,170.
+const SNM_TAKE_ROW0 = 146, SNM_TAKE_ROWH = 12;
+function snmScrTake(S){
+    const T=SNM_TAKEAWAYS[S.tk];
+    const px=SNM_TAKE_PX[T.key];
+    if(!px) return snmScrTakeDrawn(S);
+    D.set(px);                                                     // the restaurant
+    snmBand(0, T.name, T.col[2]===0xFF&&T.col[0]===0 ? ZC.BC : T.col);
+    snmRect(4,128,248,55,ZC.K); snmFrame(4,128,248,55,ZC.W);       // the panel
+    if(S.phase==='nope'){
+        const N=SNM_TAKEAWAYS[S.next];
+        snmText8C(SNM_GIRL+' SHOUTS FROM THE CAR:', 132, ZC.BY, null);
+        const L = S.n===1
+            ? ["OH NO, I DON'T FANCY", T.the+'.', 'I FANCY '+N.a+'!']
+            : ["OH... ACTUALLY, I DON'T", 'FANCY '+T.a+' NOW.', 'I FANCY '+N.a+'!'];
+        L.forEach((t,i)=>snmText8C(t, SNM_TAKE_ROW0+i*SNM_TAKE_ROWH, i===2 && snmFlash() ? ZC.BY : ZC.W, null));
+    } else if(S.phase==='pick'){
+        snmText8C('MENU', 132, ZC.BY, null);
+        T.menu.forEach(([item,price],i)=>{
+            const y=SNM_TAKE_ROW0+i*SNM_TAKE_ROWH, sel=i===S.sel;
+            if(sel) snmRect(8,y-2,240,11, snmFlash()?ZC.BY:ZC.W);
+            const ink=sel?ZC.K:ZC.W;
+            snmText8(item, 12, y, ink, null);
+            snmText8('\u00a3'+price, 244-5*8, y, ink, null);
+        });
+    } else {
+        const [item,price]=T.menu[S.sel];
+        snmText8C('ONE '+item+'.', 138, ZC.W, null);
+        snmText8C("THAT'S \u00a3"+price+'. TA, LOVE.', 152, ZC.W, null);
+        snmText8C('GET IT HOME HOT!', 166, snmFlash()?ZC.BY:ZC.W, null);
+    }
+    snmBand(184, S.phase==='pick' ? 'UP/DOWN CHOOSE  E: ORDER' : S.phase==='nope' ? 'PRESS E TO LEAVE' : 'PRESS E', ZC.BY);
+}
+function snmScrTakeDrawn(S){
+    const T=SNM_TAKEAWAYS[S.tk];
+    // walls
+    if(T.key==='chippy') snmChequer(0,0,W,146,ZC.W,ZC.C,4);
+    else if(T.key==='chinese'){ snmRect(0,0,W,146,ZC.R);
+        for(const x of [30,226]){ snmRect(x-1,14,2,8,ZC.K);
+            for(let y=-8;y<=8;y++) for(let xx=-7;xx<=7;xx++) if(xx*xx/49+y*y/64<=1) px(x+xx,30+y,ZC.BY); } }
+    else { snmRect(0,0,W,146,ZC.M); for(let x=0;x<W;x+=8){ px(x+3,14,ZC.BY); px(x+3,100,ZC.BY); } }
+    snmBand(0, T.name, T.col[2]===0xFF&&T.col[0]===0 ? ZC.BC : T.col);
+    // menu board
+    snmRect(14,20,228,76,ZC.K); snmFrame(14,20,228,76,ZC.W);
+    if(S.phase==='nope'){
+        const N=SNM_TAKEAWAYS[S.next];
+        snmText8C(SNM_GIRL+' SHOUTS FROM THE CAR:', 24, ZC.BY, null);
+        const L = S.n===1
+            ? ["OH NO, I DON'T FANCY", T.the+'.', 'I FANCY '+N.a+'!']
+            : ["OH... ACTUALLY, I DON'T", 'FANCY '+T.a+' NOW.', 'I FANCY '+N.a+'!'];
+        L.forEach((t,i)=>snmText8C(t, 42+i*14, i===2 && snmFlash() ? ZC.BY : ZC.W, null));
+    } else if(S.phase==='pick'){
+        snmText8C('MENU', 24, ZC.BY, null);
+        T.menu.forEach(([item,price],i)=>{
+            const y=38+i*14, sel=i===S.sel;
+            if(sel) snmRect(18,y-2,220,12, snmFlash()?ZC.BY:ZC.W);
+            const ink=sel?ZC.K:ZC.W;
+            snmText8(item, 22, y, ink, null);
+            snmText8('£'+price, 238-5*8, y, ink, null);
+        });
+    } else {
+        const [item,price]=T.menu[S.sel];
+        snmText8C('ONE '+item+'.', 34, ZC.W, null);
+        snmText8C("THAT'S £"+price+'. TA, LOVE.', 50, ZC.W, null);
+        snmText8C('GET IT HOME HOT!', 72, snmFlash()?ZC.BY:ZC.W, null);
+    }
+    // the man behind the counter (chef's hat)
+    const f=snmFigure('man', CAM.yaw+180, 0, false);
+    snmBlit(f.rows, f.pal, 196, 152, 3, false);
+    snmRect(187,88,18,10,ZC.W); snmRect(184,96,24,3,ZC.W);   // chef's hat
+    // counter
+    snmRect(0,126,W,4,ZC.W); snmRect(0,130,W,16,ZC.GR);
+    for(let x=0;x<W;x+=32) snmRect(x,130,1,16,ZC.K);
+    if(S.phase==='ready'){                              // the order, steaming
+        snmRect(104,104,30,22,ZC.W); snmFrame(104,104,30,22,ZC.K); snmRect(104,108,30,1,ZC.K);
+        for(let k=0;k<3;k++) for(let y=0;y<12;y++)
+            px(110+k*8+Math.round(Math.sin((y+SNM.t)*0.6)*1.5), 90+y, ZC.W);
+    }
+    snmChequer(0,146,W,38,ZC.K,ZC.W,8);
+    snmBand(184, S.phase==='pick' ? 'UP/DOWN CHOOSE  E: ORDER' : S.phase==='nope' ? 'PRESS E TO LEAVE' : 'PRESS E', ZC.BY);
+}
+
+function snmRating(){
+    const spare=((SNM.legs.girl||0)+(SNM.legs.video||0)+(SNM.legs.cold||0))/3;
+    const calm=1-SNM.peak/100;
+    return Math.max(1, Math.min(10, Math.round(3 + 4*spare + 3*calm)));
+}
+function snmScrWin(S){
+    snmChequer(0,0,W,140,ZC.B,ZC.K,1);                  // dim room
+    snmChequer(0,140,W,44,ZC.R,ZC.M,2);                 // carpet
+    snmBand(0, 'A SATURDAY NIGHT TO REMEMBER', ZC.BY);
+    const r=snmRating();
+    snmText8(r+'/10 NIGHT', 6, 14, ZC.W, null);
+    for(let i=0;i<10;i++) snmRect(104+i*7, 14, 5, 7, i<r ? ZC.BG : ZC.K);
+    // telly
+    snmRect(150,56,84,70,ZC.GR); snmFrame(150,56,84,70,ZC.K);
+    snmRect(157,62,70,52,ZC.C);
+    const v=SNM_VIDEOS[SNM.choice.video||0];
+    v.lines.forEach((t,j)=>{ const w=t.length*4-1; _text35(t, 192-Math.round(w/2), 76+j*8, ZC.K); });
+    snmRect(170,126,44,6,ZC.K);
+    for(let i=0;i<14;i++){ px(170+i,55-i,ZC.K); px(214-i,55-i,ZC.K); }   // rabbit ears
+    // sofa with the two of you on it
+    snmRect(14,100,120,14,ZC.M); snmRect(10,112,128,30,ZC.M); snmFrame(10,112,128,30,ZC.K);
+    const m=SNM_SPR.man, g=SNM_SPR.girl;
+    snmBlit(m.back.slice(0,10), m.pal, 50, 112, 2, false);
+    snmBlit(g.back.slice(0,10), g.pal, 94, 112, 2, false);
+    // the takeaway on the table
+    snmRect(30,150,90,6,ZC.Y); snmRect(34,156,4,14,ZC.Y); snmRect(112,156,4,14,ZC.Y);
+    snmRect(64,138,22,12,ZC.W); snmFrame(64,138,22,12,ZC.K);
+    const T=SNM_TAKEAWAYS[SNM.choice.take||0];
+    snmText8C('+ '+T.menu[SNM.choice.dish||0][0], 172, ZC.W, null);
+    snmBand(184, 'E: ANOTHER NIGHT  ESC: CRUISE', ZC.BY);
+}
+const SNM_FAIL_TEXT = {
+    girl:  [SNM_GIRL+' GOT FED UP WAITING', 'AND WENT DOWN THE PUB', 'WITH HER MATES.'],
+    video: ["THE LAST COPY'S GONE.", "IT'S BAD TELLY OR NOTHING."],
+    cold:  ["THE FOOD'S STONE COLD.", SNM_GIRL+"'S NOT IMPRESSED."],
+    stress:[SNM_GIRL+"'S HAD ENOUGH OF", "YOUR DRIVING. SHE'S GETTING", 'A TAXI HOME.'],
+};
+function snmScrFail(S){
+    snmRect(0,0,W,34, snmFlash()?ZC.R:ZC.BR);
+    snmText8C('NIGHT RUINED', 9, ZC.W, null, 2);
+    (SNM_FAIL_TEXT[SNM.fail]||[]).forEach((t,i)=>snmText8C(t, 50+i*12, ZC.W, null));
+    const f=snmFigure('girl', CAM.yaw+180, 0, false);
+    snmBlit(f.rows, f.pal, 128, 176, 3, false);
+    snmBand(184, 'E: TRY AGAIN  ESC: CRUISE', ZC.BY);
+}
+
+
 function update(){
     if(!MAP_LOADED) return;
+    if(SNM.active){
+        if(OPTS.open) return;          // the night waits while the options screen is up
+        snmUpdate(); return;
+    }
     updateCar();
     updateChaseCamera();
 }
@@ -6618,6 +7932,8 @@ const REMAPPABLE = [
 // ── Menu definitions ───────────────────────────────────────────────────────
 // Each item: label, plus either value() for a spinner or act() for an action.
 const OPT_MAIN = [
+    { label:'SATURDAY NIGHT', value:()=>(SNM.active?'ON':'OFF'),
+      act:()=>{ optsClose(); if(SNM.active) snmQuit(); else snmStart(); } },
     { label:'GRAPHICS',  value:()=>gfxName(),
       left:()=>cycleGfx(-1), right:()=>cycleGfx(1) },
     { label:'BUILDINGS', value:()=>Math.round(BUILD_DENSITY*100)+'%',
@@ -6741,6 +8057,7 @@ const KEY_HELP = [
     ['SHIFT',     'HANDBRAKE'],
     ['SPACE',     'RESET CAR'],
     ['ESC',       'OPTIONS'],
+    ['E / ENTER', 'GET OUT/IN, DOORS'],
     ['',          ''],
     ['B',         'BUILDINGS'],
     ['G',         'GRAPHICS MODE'],
