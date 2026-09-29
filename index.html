@@ -80,6 +80,15 @@ body { background: #000; min-height: 100vh; display: flex; flex-direction: colum
     width: 768px; height: 576px; image-rendering: pixelated;
     image-rendering: crisp-edges;
 }
+/* ── Steps signpost (magenta Spectrum paper), same viewport as the menus ── */
+#steps {
+    display: none; width: 768px; background: #000; justify-content: center;
+    padding: 0; user-select: none; cursor: pointer;
+}
+#steps-canvas {
+    width: 768px; height: 576px; image-rendering: pixelated;
+    image-rendering: crisp-edges;
+}
 /* ── Road-tracing / map screen (yellow Spectrum paper) ───────────────── */
 #trace { display:none; flex-direction:column; align-items:center; gap:8px; width:948px; }
 #trace-bar {
@@ -254,6 +263,10 @@ body.touch #map {
     <input id="load-file" type="file" accept="application/json,.json" style="position:absolute;left:-9999px;" tabindex="-1">
 </div>
 <div id="status"></div>
+<!-- ── Steps signpost (S28): shown after a typed place builds, before the road screen ── -->
+<div id="steps">
+    <canvas id="steps-canvas" width="256" height="192"></canvas>
+</div>
 
 <!-- ── Road-tracing screen: click roads to pick which ones to keep ── -->
 <div id="trace">
@@ -3679,6 +3692,7 @@ function csChoose(n){
     if(n>=1 && n<=4){
         ZXLOAD.prime();   // unlock audio on this user gesture (fetch starts async)
         placeInput.value = CS_CITIES[n-1].query;
+        STEPS_PENDING = false;   // the signpost is for typed places only
         if(CS_CITIES[n-1].embed && EMBED_MAPS[CS_CITIES[n-1].embed]) loadEmbeddedMap(CS_CITIES[n-1].embed);
         else startBuild();
     } else if(n===5){
@@ -3727,7 +3741,7 @@ function csCustomKey(e){
             loadFileInput.click();
             return;
         }
-        if(v){ ZXLOAD.prime(); csTypeEl.blur(); placeInput.value=v; startBuild(); }
+        if(v){ ZXLOAD.prime(); csTypeEl.blur(); placeInput.value=v; STEPS_PENDING=true; startBuild(); }
         return;
     }
     if(e.key==='Backspace'){ CS.customText=CS.customText.slice(0,-1); csTypeEl.value=CS.customText; csPaint(); return; }
@@ -4350,6 +4364,7 @@ async function loadEmbeddedMap(key){
         ZXLOAD.start();                              // the tape stripes while it unpacks
         const snap = await embeddedSnapshot(key);
         loadSnapshot(snap);                          // stops the stripes and shows the game
+        modeShow(true);                              // S28: no road screen, straight to SELECT GAME MODE
     } catch(err){
         console.error('[embed] '+key+' failed, building live instead:', err);
         ZXLOAD.stop();
@@ -5517,6 +5532,244 @@ function withTimeout(promise, ms){
     ]);
 }
 
+// ─── Steps signpost (S28) ────────────────────────────────────────────────────
+// After a typed place (city option 5) has built, and before the road screen,
+// show the three steps ahead, laid out like the city-select screen on magenta paper.
+// Any key, click, tap or pad button carries on to the road screen.
+const stepsEl = $('steps'), stepsCanvas = $('steps-canvas');
+const sctx = stepsCanvas.getContext('2d');
+sctx.imageSmoothingEnabled = false;
+const ST_MAGENTA = '#C000C0', ST_BLACK = '#000000';
+const STEPS_LIST = ['SELECT ROADS', 'DRAW SCENERY', 'SELECT GAME MODE'];
+let STEPS_PENDING = false;      // set when the current build came from a typed place
+let STEPS = { open:false, onGo:null, blink:0, timer:null };
+
+// City-select look (title on ROW_HEAD, prompt on ROW_ENTER, magenta paper,
+// black ink). No numbers, so nobody thinks the steps are choices: each step is
+// centred on its own line, with a down arrow on the row between them.
+const ST_ROW0 = 9, ST_ROWS = 4;                     // steps on rows 9, 13, 17; arrows on 11, 15
+function stepsArrow(row){                           // 2-px shaft, 8-px head, centred on x 128
+    const y = row*8;
+    sctx.fillStyle = ST_BLACK;
+    sctx.fillRect(127, y, 2, 4);
+    [[124,8],[125,6],[126,4],[127,2]].forEach(([x,w],j)=>sctx.fillRect(x, y+4+j, w, 1));
+}
+function stepsPaint(){
+    sctx.fillStyle = ST_MAGENTA; sctx.fillRect(0,0,256,192);
+    zxCentre(sctx, 'CRUISE ANYWHERE', ROW_HEAD, ST_BLACK, ST_MAGENTA);
+    STEPS_LIST.forEach((label, i)=>{
+        const r = ST_ROW0 + i*ST_ROWS;
+        zxCentre(sctx, label, r, ST_BLACK, ST_MAGENTA);
+        if(i < STEPS_LIST.length-1) stepsArrow(r + ST_ROWS/2);
+    });
+    if(STEPS.blink < 20){
+        const prompt = PAD_USED ? 'PRESS A' : (IS_TOUCH ? 'TAP TO START' : 'PRESS ANY KEY');
+        zxCentre(sctx, prompt, ROW_ENTER, ST_BLACK, ST_MAGENTA);
+    }
+}
+function stepsTick(){
+    if(!STEPS.open) return;
+    STEPS.blink = (STEPS.blink+1) % 30;
+    (STEPS.paint || stepsPaint)();
+    STEPS.timer = setTimeout(stepsTick, 33);
+}
+// paint: which screen to draw (default the three-steps signpost; ctrlPaint for CONTROLS)
+function stepsShow(onGo, paint){
+    showScreen('steps');
+    STEPS.open = true; STEPS.onGo = onGo; STEPS.blink = 0; STEPS.paint = paint || stepsPaint;
+    STEPS.shownAt = performance.now();
+    STEPS.paint();
+    if(STEPS.timer) clearTimeout(STEPS.timer);
+    STEPS.timer = setTimeout(stepsTick, 33);
+}
+function stepsGo(){
+    if(!STEPS.open) return;
+    if(performance.now() - STEPS.shownAt < 250) return;   // ignore a press already in flight
+    STEPS.open = false;
+    if(STEPS.timer){ clearTimeout(STEPS.timer); STEPS.timer = null; }
+    stepsEl.style.display = 'none';
+    const f = STEPS.onGo; STEPS.onGo = null;
+    if(f) f();
+}
+document.addEventListener('keydown', e=>{
+    if(!STEPS.open) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    stepsGo();
+}, true);
+stepsEl.addEventListener('click', e=>{ if(MODE.open) modeClick(e); else stepsGo(); });
+
+// ─── Controls (S28) ─────────────────────────────────────────────────────────
+// Shown after the game mode is picked, before the drive. Yellow paper, a black
+// Xbox-style pad drawn pixel by pixel, each job written beside the pad with a
+// line to its button (lines flip to yellow where they cross the pad). Labels
+// follow PAD_MAP, so a remapped button moves its label's line. Keyboard summary
+// below. Any key / click / button carries on (via the STEPS machinery).
+const CT_YELLOW = '#C0C000', CT_BLACK = '#000000';
+let CTRL_MODE = 1;                         // 1 cruise, 2 Saturday Night
+let CT_MASK = null;                        // 256x192: 1 where the pad is black
+const PAD_CX = 128;
+function ctInEll(x,y,cx,cy,rx,ry,a){
+    const dx=x-cx, dy=y-cy, c=Math.cos(a||0), s=Math.sin(a||0);
+    const u=(dx*c+dy*s)/rx, v=(-dx*s+dy*c)/ry;
+    return u*u+v*v<=1;
+}
+function ctInBox(x,y,cx,cy,hw,hh){          // rounded-box (superellipse, n=3)
+    return Math.pow(Math.abs(x-cx)/hw,3)+Math.pow(Math.abs(y-cy)/hh,3) <= 1;
+}
+// Xbox-style pad: a wide, boxy upper body; two grips angled down and out;
+// an arch cut out between the grips; bumpers and triggers on top.
+function ctPadBody(x,y){
+    let on = ctInBox(x,y,PAD_CX,80,58,22)
+          || ctInEll(x,y,PAD_CX-38,106,20,27, 0.42)
+          || ctInEll(x,y,PAD_CX+38,106,20,27,-0.42);
+    if(on && y>92 && ctInEll(x,y,PAD_CX,124,26,22)) on=false;   // the arch between the grips
+    return on;
+}
+function ctBumper(x,y){
+    const ax=Math.abs(x-PAD_CX);
+    return y<68 && ax>16 && ax<54 && ctInBox(x,y,PAD_CX,80,61,26) && !ctInBox(x,y,PAD_CX,80,59,24);
+}
+function ctTrigger(x,y){      // solid rounded triggers behind the bumpers, 1-px gap
+    return (ctInEll(x,y,PAD_CX-29,50,12,6) || ctInEll(x,y,PAD_CX+29,50,12,6))
+        && !ctInBox(x,y,PAD_CX,80,62,27);
+}
+// Where each button sits on the pad (by button index), for the label lines.
+const CT_BTN = {
+    0:[160,85], 1:[168,77], 2:[152,77], 3:[160,69],       // A B X Y
+    4:[92,57],  5:[164,57],                                // LB RB
+    6:[96,48],  7:[160,48],                                // LT RT
+    8:[119,77], 9:[137,77],                                // BACK/VIEW, START/MENU
+    10:[96,73], 11:[144,91],                               // sticks
+    12:[112,86], 13:[112,96], 14:[107,91], 15:[117,91],    // d-pad
+};
+function ctPx(x,y,c){ sctx.fillStyle=c; sctx.fillRect(x,y,1,1); }
+function ctDrawPad(){
+    CT_MASK = new Uint8Array(256*192);
+    for(let y=36;y<144;y++) for(let x=56;x<200;x++){
+        if(ctPadBody(x,y) || ctBumper(x,y) || ctTrigger(x,y)){ CT_MASK[y*256+x]=1; ctPx(x,y,CT_BLACK); }
+    }
+    const Y=CT_YELLOW, hole=(x,y)=>{ ctPx(x,y,Y); CT_MASK[y*256+x]=0; };
+    const ring=(cx,cy,r)=>{ for(let y=cy-r-1;y<=cy+r+1;y++) for(let x=cx-r-1;x<=cx+r+1;x++){
+        const d=Math.hypot(x-cx,y-cy); if(d<=r+0.5 && d>r-0.8) hole(x,y); } };
+    const dot=(cx,cy,r)=>{ for(let y=cy-r;y<=cy+r;y++) for(let x=cx-r;x<=cx+r;x++)
+        if(Math.hypot(x-cx,y-cy)<=r+0.3) hole(x,y); };
+    ring(96,73,6); ring(96,73,3);           // left stick
+    ring(144,91,6); ring(144,91,3);         // right stick
+    // d-pad: an outlined plus
+    const cx=112, cy=91;
+    for(let i=-5;i<=5;i++){
+        if(Math.abs(i)>=2){ hole(cx-2,cy+i); hole(cx+2,cy+i); hole(cx+i,cy-2); hole(cx+i,cy+2); }
+    }
+    for(let i=-2;i<=2;i++){ hole(cx+i,cy-5); hole(cx+i,cy+5); hole(cx-5,cy+i); hole(cx+5,cy+i); }
+    dot(160,69,3); dot(152,77,3); dot(168,77,3); dot(160,85,3);       // Y X B A
+    dot(119,77,1); dot(137,77,1);          // view / menu
+    ring(128,65,4); dot(128,65,1);         // guide button
+}
+// A line that is black on paper and yellow where it crosses the pad.
+function ctLine(x0,y0,x1,y1){
+    const dx=Math.abs(x1-x0), dy=-Math.abs(y1-y0), sx=x0<x1?1:-1, sy=y0<y1?1:-1;
+    let err=dx+dy;
+    for(;;){
+        ctPx(x0,y0, CT_MASK[y0*256+x0] ? CT_YELLOW : CT_BLACK);
+        if(x0===x1 && y0===y1) break;
+        const e2=2*err;
+        if(e2>=dy){ err+=dy; x0+=sx; }
+        if(e2<=dx){ err+=dx; y0+=sy; }
+    }
+}
+// A label at text column/row, with a line from (lx,ly) to the button.
+function ctLabel(text, col, row, lx, ly, btn){
+    zxText(sctx, text, col, row, CT_BLACK, CT_YELLOW);
+    const p = CT_BTN[btn]; if(p) ctLine(lx, ly, p[0], p[1]);
+}
+function ctrlPaint(){
+    sctx.fillStyle = CT_YELLOW; sctx.fillRect(0,0,256,192);
+    zxCentre(sctx, 'CONTROLS', 1, CT_BLACK, CT_YELLOW);
+    ctDrawPad();
+    const sat = CTRL_MODE===2;
+    // above the pad: triggers
+    ctLabel('BRAKE',      2, 3,  44, 32, PAD_MAP.brake);
+    ctLabel('ACCELERATE',20, 3, 200, 32, PAD_MAP.throttle);
+    // left: stick
+    ctLabel('STEER',      1, 9,  49, 75, 10);
+    if(sat) zxText(sctx, '& WALK', 0, 10, CT_BLACK, CT_YELLOW);
+    // right: face buttons
+    if(sat) ctLabel('IN/OUT', 25, 7, 198, 59, 3);          // Y (X works too)
+    ctLabel('RESET',     25, 10, 198, 83, PAD_MAP.reset);
+    // below the pad
+    ctLabel('HANDBRAKE', 22, 17, 200, 135, PAD_MAP.handbrake);
+    ctLabel('OPTIONS',    8, 17, 100, 135, PAD_MAP.options);
+    // keyboard
+    zxCentre(sctx, 'KEYS: W A S D OR ARROWS', 19, CT_BLACK, CT_YELLOW);
+    zxCentre(sctx, 'SHIFT HANDBRAKE  SPACE RESET', 20, CT_BLACK, CT_YELLOW);
+    zxCentre(sctx, sat ? 'E IN/OUT  ESC OPTIONS' : 'ESC OPTIONS', 21, CT_BLACK, CT_YELLOW);
+    if(STEPS.blink < 20){
+        const prompt = PAD_USED ? 'PRESS A' : (IS_TOUCH ? 'TAP TO START' : 'PRESS ANY KEY');
+        zxCentre(sctx, prompt, 23, CT_BLACK, CT_YELLOW);
+    }
+}
+
+// ─── Select game mode (S28) ──────────────────────────────────────────────────
+// Step 3: after BUILD on the scenery page, the map is built and loaded, then
+// this screen picks the mode before the drive starts. Same layout as the
+// city-select screen, on yellow paper; it shares the steps canvas.
+// 1 = CRUISE MODE (free drive), 2 = SATURDAY NIGHT MODE (snmStart -> briefing).
+// Esc / pad B goes back to the road screen.
+const MD_YELLOW = '#C0C000', MD_BLACK = '#000000';
+const MODE_LIST = ['CRUISE MODE', 'SATURDAY NIGHT MODE'];
+let MODE = { open:false, padSel:null, shownAt:0 };
+
+function modePaint(){
+    sctx.fillStyle = MD_YELLOW; sctx.fillRect(0,0,256,192);
+    zxCentre(sctx, 'SELECT GAME MODE', ROW_HEAD, MD_BLACK, MD_YELLOW);
+    MODE_LIST.forEach((label, i)=>{
+        const r = ROW_FIRST + i*ROW_GAP;
+        const hi = MODE.padSel===i;
+        const ink = hi ? MD_YELLOW : MD_BLACK, pap = hi ? MD_BLACK : MD_YELLOW;
+        if(hi){ sctx.fillStyle=MD_BLACK; sctx.fillRect((COL_NUM-1)*8, r*8, (COL_NAME+21-(COL_NUM-1))*8, 8); }
+        zxText(sctx, (i+1)+'.', COL_NUM,  r, ink, pap);
+        zxText(sctx, label,     COL_NAME, r, ink, pap);
+    });
+    zxCentre(sctx, MODE.padSel!==null ? 'UP/DOWN THEN A' : (IS_TOUCH ? 'TAP A MODE' : 'ENTER 1 OR 2'),
+             ROW_ENTER, MD_BLACK, MD_YELLOW);
+}
+// fromEmbed: the map came from a built-in snapshot (Harlow, Chadwell Heath), so
+// there is no road screen to go back to; Esc returns to the city list instead.
+function modeShow(fromEmbed){
+    showScreen('steps');
+    MODE.fromEmbed = !!fromEmbed;
+    MODE.open = true; MODE.padSel = PAD_USED ? 0 : null;
+    MODE.shownAt = performance.now();
+    modePaint();
+}
+function modePick(n){
+    if(!MODE.open || performance.now() - MODE.shownAt < 250) return;
+    MODE.open = false;
+    stepsEl.style.display = 'none';
+    // S28: the CONTROLS screen, then the drive (Saturday Night: then its briefing)
+    CTRL_MODE = n;
+    stepsShow(()=>{ showGame(); if(n===2) snmStart(); }, ctrlPaint);
+}
+function modeBack(){
+    if(!MODE.open) return;
+    MODE.open = false;
+    stepsEl.style.display = 'none';
+    if(MODE.fromEmbed) $('back').click();   // built-in map: back to SELECT A CITY
+    else $('back-map').click();             // back to the road screen, selection kept
+}
+function modeClick(e){
+    const rect = stepsCanvas.getBoundingClientRect();
+    const row = Math.floor(((e.clientY-rect.top)/rect.height)*24);
+    const i = Math.floor((row-ROW_FIRST)/ROW_GAP);
+    if(row>=ROW_FIRST && i>=0 && i<MODE_LIST.length) modePick(i+1);
+}
+document.addEventListener('keydown', e=>{
+    if(!MODE.open) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if(e.key==='1' || e.key==='2') modePick(+e.key);
+    else if(e.key==='Escape') modeBack();
+}, true);
+
 async function startBuild(){
     const place = placeInput.value.trim();
     if(!place){ setStatus('Type a place name first.', 'err'); return; }
@@ -5729,7 +5982,8 @@ out geom;`;
         // ones to keep, replacing the old auto-prune. The chosen roads are then
         // built into the drivable map by buildFromSelection().
         setStatus('');
-        openTrace(cand, place, lat0, lon0);
+        if(STEPS_PENDING){ STEPS_PENDING=false; stepsShow(()=>openTrace(cand, place, lat0, lon0)); }
+        else openTrace(cand, place, lat0, lon0);
     } catch(err){
         setStatus('Build failed: '+err.message, 'err');
     } finally {
@@ -6520,7 +6774,7 @@ async function buildFromSelection(){
     if(ok && data){
         traceEl.style.display='none';
         loadMap(data);
-        showGame();
+        modeShow();          // S28: step 3, choose CRUISE or SATURDAY NIGHT before driving
     } else {
         // build failed — stay on the trace screen so the user can retry,
         // rather than stranding them on an endless loading screech.
@@ -7977,6 +8231,7 @@ const SCREENS = {
     // must be explicit. #menu is flex, #status is block.
     menu:  [['menu','flex'], ['status','block']],
     trace: [['trace','flex']],
+    steps: [['steps','flex']],
     game:  [['game','flex']],
     jed:   [['jed','flex']],
     opts:  [['opts','flex']],
@@ -8323,6 +8578,7 @@ optsCanvas.addEventListener('click', ev=>{
 let PAD_PREV = { up:false, down:false, left:false, right:false,
                  ok:false, back:false, opts:false, raw:[] };
 let PAD_CITY = { up:false, down:false, a:false, b:false };
+let PAD_USED = false;   // a pad has been pressed this session (steps prompt says PRESS A)
 function optsPadPoll(){
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
     let gp=null; for(const p of pads){ if(p){ gp=p; break; } }
@@ -8372,7 +8628,20 @@ function optsPadPoll(){
         let anyNew=false;
         for(let i=0;i<gp.buttons.length;i++) if(btn(i) && !PAD_PREV.raw[i]){ anyNew=true; break; }
         let consumed=false;
-        if(anyNew){
+        if(anyNew) PAD_USED = true;
+        if(MODE.open){
+            const mUp = btn(12) || ay < -0.5, mDown = btn(13) || ay > 0.5;
+            if((mUp && !PAD_CITY.up) || (mDown && !PAD_CITY.down)){
+                MODE.padSel = MODE.padSel===null ? 0 : (MODE.padSel+1) % MODE_LIST.length;
+                modePaint();
+            } else if(btn(0) && !PAD_CITY.a){
+                if(MODE.padSel===null){ MODE.padSel=0; modePaint(); }
+                else modePick(MODE.padSel+1);
+            } else if(btn(1) && !PAD_CITY.b) modeBack();
+            consumed=true;
+        }
+        else if(anyNew && STEPS.open){ stepsGo(); consumed=true; }
+        else if(anyNew){
             if(!TITLE.done && document.getElementById('title').style.display!=='none'){ titleDismiss(); consumed=true; }
             else if(menuEl.style.display!=='none' && !CS.ready && !CS.custom){ csSkipIntro(); consumed=true; }
         }
