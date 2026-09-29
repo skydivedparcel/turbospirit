@@ -4540,8 +4540,23 @@ async function fetchElevations(locs){
                 return data.results.map(r=> r.elevation==null ? 0 : r.elevation);
             }
         }] : []),
-        { // OpenTopoData (SRTM 30 m) — GET, lat,lon|lat,lon, cap 100/call
-            name:'opentopodata',
+        { // S28: Open-Meteo (Copernicus GLO-90) — GET, keyless, up to 100 points per
+          // call, and it allows calls from a web page (CORS), so it works when the
+          // game is hosted and the local /elevation proxy isn't there.
+            name:'open-meteo', gap:250,
+            run: async (batch)=>{
+                const lat = batch.map(([la])=>la.toFixed(5)).join(',');
+                const lon = batch.map(([,lo])=>lo.toFixed(5)).join(',');
+                const data = await fetchJSON('https://api.open-meteo.com/v1/elevation?latitude='+lat+'&longitude='+lon,
+                                             { headers:{'Accept':'application/json'} });
+                if(!data || !Array.isArray(data.elevation) || data.elevation.length!==batch.length) return null;
+                return data.elevation.map(h=> (h==null || !isFinite(h)) ? 0 : h);
+            }
+        },
+        { // OpenTopoData (SRTM 30 m) — GET, lat,lon|lat,lon, cap 100/call.
+          // The public API allows 1 call per second: pace batches 1.1 s apart
+          // (they were 0.25 s, so batch 2 was refused and the build went flat).
+            name:'opentopodata', gap:1100,
             run: async (batch)=>{
                 const locParam = batch.map(([la,lo])=>la.toFixed(6)+','+lo.toFixed(6)).join('|');
                 const url = 'https://api.opentopodata.org/v1/srtm30m?locations='+encodeURIComponent(locParam);
@@ -4574,12 +4589,16 @@ async function fetchElevations(locs){
             const batch = locs.slice(i, i+ELEV_BATCH);
             let res = null;
             try { res = await prov.run(batch); } catch(e){ res = null; }
-            if(!res){ ok = false; break; }
+            if(!res && i>0){             // one retry mid-run (a busy public server)
+                await new Promise(r=>setTimeout(r, (prov.gap||250)*2));
+                try { res = await prov.run(batch); } catch(e){ res = null; }
+            }
+            if(!res){ ok = false; console.warn('[elevation] '+prov.name+' failed at batch '+(i/ELEV_BATCH+1)); break; }
             for(const h of res) out.push(h);
             // be gentle with public endpoints between batches
-            if(i+ELEV_BATCH < locs.length) await new Promise(r=>setTimeout(r, 250));
+            if(i+ELEV_BATCH < locs.length) await new Promise(r=>setTimeout(r, prov.gap||250));
         }
-        if(ok && out.length===locs.length) return out;
+        if(ok && out.length===locs.length){ console.log('[elevation] heights from '+prov.name); return out; }
     }
     return null;   // every provider failed → flat fallback
 }
