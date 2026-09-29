@@ -7173,50 +7173,39 @@ const SNM_GRUMBLES = ['WATCH THE KERB!', 'MIND THE GARDEN!', 'ARE YOU MAD?!',
                       'THAT WAS A HEDGE!', 'I JUST DID MY HAIR!', 'OI! THE ROAD!'];
 function snmSay(text, frames){ SNM.msg={ text, t:frames||50 }; }
 
-// ── Sprites (9 px wide; 12 body rows + 6 leg rows) ──────────────────────────
+// ── Sprites: baked from voxel models (bake_people.py) ────────────────────────
+// On-foot people, baked from voxel models by bake_people.py (man = owner's
+// template; Tracey derived: shorter, skirt, long yellow hair). Each view has a
+// 4-frame walk: stand, step, stand, mirrored step. h = rows per frame.
 const SNM_SPR = {
-  // Original Turbo Esprit pedestrian look (S26-d): pin head narrower than the
-  // shoulders, sloping shoulders, a body as wide as the legs all the way up,
-  // thin arms hanging at the sides. All black.
-  man: {
-    pal:{ K:[0,0,0] },
-    back:["....K....","...KKK...","...KKK...","....K....","...KKK...","..KKKKK..",".K.KKK.K.",".K.KKK.K.",".K.KKK.K.",".K.KKK.K.","...KKK...","...KKK..."],
-    front:["....K....","...KKK...","...KKK...","....K....","...KKK...","..KKKKK..",".K.KKK.K.",".K.KKK.K.",".K.KKK.K.",".K.KKK.K.","...KKK...","...KKK..."],
-    side:["....K....","...KKK...","...KKK...","....K....","...KK....","...KKK...","...KK.K..","...KK.K..","...KK..K.","...KK....","...KK....","...KK...."],
-    leg:'K',
+  man: { pal:{"K":[0,0,0],"W":[255,255,255]}, h:33,
+    back:[["...WWWW...","...KKKK...","...KKKK...","...KKKK...","...KKKK...","...WKKW...","..WKKKKW..",".WKKKKKKW.",".KKKKKKKK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".WWKKKKWW.","...KKKK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK..."],["...WWWW...","...KKKK...","...KKKK...","...KKKK...","...KKKK...","...WKKW...","..WKKKKW..",".WKKKKKKW.",".KKKKKKKK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.","KWWKKKKWK.","KWWKKKKWK.","KWWKKKKWK.","KWWKKKKWK.","KWWKKKKWK.","KWWKKKKWW.","...KKKK...","...KWWK...","...KWWK...","...KWWK...","...KWWWK..","...KWWWK..","...KWWWK..","...KWWWK..","...KWWWK..","...KWWWK..","...KWWWK..","...KWWWK.."],["...WWWW...","...KKKK...","...KKKK...","...KKKK...","...KKKK...","...WKKW...","..WKKKKW..",".WKKKKKKW.",".KKKKKKKK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".WWKKKKWW.","...KKKK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK..."],["...WWWW...","...KKKK...","...KKKK...","...KKKK...","...KKKK...","...WKKW...","..WKKKKW..",".WKKKKKKW.",".KKKKKKKK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWWK",".KWKKKKWWK",".KWKKKKWWK",".KWKKKKWWK",".KWKKKKWWK",".WWKKKKWWK","...KKKK...","...KWWK...","...KWWK...","...KWWK...","..KWWWK...","..KWWWK...","..KWWWK...","..KWWWK...","..KWWWK...","..KWWWK...","..KWWWK...","..KWWWK..."]],
+    front:[["...WWWW...","...KKKK...","...KKKK...","...KKKK...","...KKKK...","...WKKW...","..WKKKKW..",".WKKKKKKW.",".KKKKKKKK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".WWKKKKWW.","...KKKK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK..."],["...WWWW...","...KKKK...","...KKKK...","...KKKK...","...KKKK...","...WKKW...","..WKKKKW..",".WKKKKKKW.",".KKKKKKKK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWKK",".KWKKKKWWK",".KWKKKKWWK",".KWKKKKWWK",".KWKKKKWWK",".WWKKKKWWK","...KKKK...","...KWWK...","...KWWK...","...KWWK...","..KWWWK...","..KWWWK...","..KWWWK...","..KWWWK...","..KWWWK...","..KWWWK...","..KWWWK...","..KWWWK..."],["...WWWW...","...KKKK...","...KKKK...","...KKKK...","...KKKK...","...WKKW...","..WKKKKW..",".WKKKKKKW.",".KKKKKKKK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".WWKKKKWW.","...KKKK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK...","...KWWK..."],["...WWWW...","...KKKK...","...KKKK...","...KKKK...","...KKKK...","...WKKW...","..WKKKKW..",".WKKKKKKW.",".KKKKKKKK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.","KKWKKKKWK.","KWWKKKKWK.","KWWKKKKWK.","KWWKKKKWK.","KWWKKKKWK.","KWWKKKKWW.","...KKKK...","...KWWK...","...KWWK...","...KWWK...","...KWWWK..","...KWWWK..","...KWWWK..","...KWWWK..","...KWWWK..","...KWWWK..","...KWWWK..","...KWWWK.."]],
+    side:[["..WWW..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK.."],["..WWW..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..",".KKKKK.",".KKKKK.",".KKKKK.",".KKKKK.",".KKKKK.","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..",".KKWKK.",".KKWKK.",".KKWKK.",".KKWKK.",".KKWKK.","KKWWWKK","KKWWWKK","KKWWWKK"],["..WWW..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK.."],["..WWW..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..",".KKKKK.",".KKKKK.",".KKKKK.",".KKKKK.",".KKKKK.","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..",".KKWKK.",".KKWKK.",".KKWKK.",".KKWKK.",".KKWKK.","KKWWWKK","KKWWWKK","KKWWWKK"]],
   },
-  // Tracey: the same figure with yellow hair (falling to the neck).
-  girl: {
-    pal:{ K:[0,0,0], Y:[0xFF,0xFF,0] },
-    back:["....Y....","...YYY...","...YYY...","...YYY...","...KKK...","..KKKKK..",".K.KKK.K.",".K.KKK.K.",".K.KKK.K.",".K.KKK.K.","...KKK...","...KKK..."],
-    front:["....Y....","...YYY...","...YYY...","...YKY...","...KKK...","..KKKKK..",".K.KKK.K.",".K.KKK.K.",".K.KKK.K.",".K.KKK.K.","...KKK...","...KKK..."],
-    side:["....Y....","...YYY...","...YYY...","...YK....","...KK....","...KKK...","...KK.K..","...KK.K..","...KK..K.","...KK....","...KK....","...KK...."],
-    leg:'K',
+  girl: { pal:{"K":[0,0,0],"W":[255,255,255],"Y":[255,255,0]}, h:31,
+    back:[["...WWWW...","..WYYYYW..","..YYYYYY..","..YYYYYY..","..YYYYYY..","..YYYYYY..","..YYYYYY..","..YYYYYY..",".WYYYYYYW.",".KYYYYYYK.",".KYYYYYYK.",".KYYYYYYK.",".KWYYYYWK.",".KWYYYYWK.",".KWKYYKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".WWKKKKWW.","...KKKK...","...KKKK...","..KKKKKK..","..KKKKKK..","..KKKKKK..","..WKWWKW..","...KWWK...","...KWWK...","...KWWK...","...KWWK..."],["...WWWW...","..WYYYYW..","..YYYYYY..","..YYYYYY..","..YYYYYY..","..YYYYYY..","..YYYYYY..","..YYYYYY..",".WYYYYYYW.",".KYYYYYYK.",".KYYYYYYK.",".KYYYYYYK.",".KWYYYYWK.",".KWYYYYWK.",".KWKYYKWK.","KWWKKKKWK.","KWWKKKKWK.","KWWKKKKWK.","KWWKKKKWK.","KWWKKKKWK.","KWWKKKKWW.","...KKKK...","...KKKK...","..KKKKKK..","..KKKKKK..","..KKKKKK..","..WKWWWW..","...KWWWK..","...KWWWK..","...KWWWK..","...KWWWK.."],["...WWWW...","..WYYYYW..","..YYYYYY..","..YYYYYY..","..YYYYYY..","..YYYYYY..","..YYYYYY..","..YYYYYY..",".WYYYYYYW.",".KYYYYYYK.",".KYYYYYYK.",".KYYYYYYK.",".KWYYYYWK.",".KWYYYYWK.",".KWKYYKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".WWKKKKWW.","...KKKK...","...KKKK...","..KKKKKK..","..KKKKKK..","..KKKKKK..","..WKWWKW..","...KWWK...","...KWWK...","...KWWK...","...KWWK..."],["...WWWW...","..WYYYYW..","..YYYYYY..","..YYYYYY..","..YYYYYY..","..YYYYYY..","..YYYYYY..","..YYYYYY..",".WYYYYYYW.",".KYYYYYYK.",".KYYYYYYK.",".KYYYYYYK.",".KWYYYYWK.",".KWYYYYWK.",".KWKYYKWK.",".KWKKKKWWK",".KWKKKKWWK",".KWKKKKWWK",".KWKKKKWWK",".KWKKKKWWK",".WWKKKKWWK","...KKKK...","...KKKK...","..KKKKKK..","..KKKKKK..","..KKKKKK..","..WWWWKW..","..KWWWK...","..KWWWK...","..KWWWK...","..KWWWK..."]],
+    front:[["...WWWW...","..WYYYYW..","..YYYYYY..","..YYKKYY..","..YYKKYY..","..YYKKYY..","..YWKKWY..","..YKKKKY..",".WYKKKKYW.",".KKKKKKKK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".WWKKKKWW.","...KKKK...","...KKKK...","..KKKKKK..","..KKKKKK..","..KKKKKK..","..WKWWKW..","...KWWK...","...KWWK...","...KWWK...","...KWWK..."],["...WWWW...","..WYYYYW..","..YYYYYY..","..YYKKYY..","..YYKKYY..","..YYKKYY..","..YWKKWY..","..YKKKKY..",".WYKKKKYW.",".KKKKKKKK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWKK",".KWKKKKWWK",".KWKKKKWWK",".KWKKKKWWK",".KWKKKKWWK",".WWKKKKWWK","...KKKK...","...KKKK...","..KKKKKK..","..KKKKKK..","..KKKKKK..","..WWWWKW..","..KWWWK...","..KWWWK...","..KWWWK...","..KWWWK..."],["...WWWW...","..WYYYYW..","..YYYYYY..","..YYKKYY..","..YYKKYY..","..YYKKYY..","..YWKKWY..","..YKKKKY..",".WYKKKKYW.",".KKKKKKKK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".WWKKKKWW.","...KKKK...","...KKKK...","..KKKKKK..","..KKKKKK..","..KKKKKK..","..WKWWKW..","...KWWK...","...KWWK...","...KWWK...","...KWWK..."],["...WWWW...","..WYYYYW..","..YYYYYY..","..YYKKYY..","..YYKKYY..","..YYKKYY..","..YWKKWY..","..YKKKKY..",".WYKKKKYW.",".KKKKKKKK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.",".KWKKKKWK.","KKWKKKKWK.","KWWKKKKWK.","KWWKKKKWK.","KWWKKKKWK.","KWWKKKKWK.","KWWKKKKWW.","...KKKK...","...KKKK...","..KKKKKK..","..KKKKKK..","..KKKKKK..","..WKWWWW..","...KWWWK..","...KWWWK..","...KWWWK..","...KWWWK.."]],
+    side:[["..WWW..",".YYYY..",".YYYY..",".YYYYK.",".YYYYK.",".YYYYK.",".YYYY..",".YYYY..",".YYYY..",".YKKK..",".YKKK..",".YKKK..",".YKKK..",".YKKK..",".YKKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..",".KKKKK.","..KKK..","..KKK..","..KKK..","..KKK..","..KKK.."],["..WWW..",".YYYY..",".YYYY..",".YYYYK.",".YYYYK.",".YYYYK.",".YYYY..",".YYYY..",".YYYY..",".YKKK..",".YKKK..",".YKKK..",".YKKK..",".YKKK..",".YKKK..","..KKK..",".KKKKK.",".KKKKK.",".KKKKK.",".KKKKK.","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..",".KKKKK.","..KKK..","..KKK..",".KKWKK.","KKWWWKK","KKWWWKK"],["..WWW..",".YYYY..",".YYYY..",".YYYYK.",".YYYYK.",".YYYYK.",".YYYY..",".YYYY..",".YYYY..",".YKKK..",".YKKK..",".YKKK..",".YKKK..",".YKKK..",".YKKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..",".KKKKK.","..KKK..","..KKK..","..KKK..","..KKK..","..KKK.."],["..WWW..",".YYYY..",".YYYY..",".YYYYK.",".YYYYK.",".YYYYK.",".YYYY..",".YYYY..",".YYYY..",".YKKK..",".YKKK..",".YKKK..",".YKKK..",".YKKK..",".YKKK..","..KKK..",".KKKKK.",".KKKKK.",".KKKKK.",".KKKKK.","..KKK..","..KKK..","..KKK..","..KKK..","..KKK..",".KKKKK.","..KKK..","..KKK..",".KKWKK.","KKWWWKK","KKWWWKK"]],
   },
 };
-// Leg rows: front/back views step in place; side views stride.
-function snmLegs(view, frame, c){
-    const L=s=>s.replace(/L/g,c);
-    if(view==='side'){
-        return frame%2===0
-            ? ["...LL....","...LL....","...LL....","...LL....","...LL....","...KKK..."].map(L)
-            : ["...LL....","..L..L...","..L..L...",".L....L..",".L....L..","KK....KK."].map(L);
-    }
-    const f=[0,1,0,2][frame%4];
-    if(f===0) return ["...L.L...","...L.L...","...L.L...","...L.L...","...L.L...","..KK.KK.."].map(L);
-    if(f===1) return ["...L.L...","...L.L...","...L.L...","...L.K...","...L.....","..KK....."].map(L);
-    return           ["...L.L...","...L.L...","...L.L...","...K.L...",".....L...",".....KK.."].map(L);
-}
 // Pick the view (back / front / side, mirrored for left) from the figure's
-// heading relative to the camera, then assemble body + legs.
+// heading relative to the camera, then the walk frame (stand, step, stand,
+// mirrored step; the original game's subtle shuffle).
 function snmFigure(kind, yaw, phase, moving){
     const S=SNM_SPR[kind];
     const rel=((yaw-CAM.yaw+540)%360)-180;
     let view='back', flip=false;
     if(Math.abs(rel)>135) view='front';
     else if(Math.abs(rel)>45){ view='side'; flip = rel<0; }
-    const frame = moving ? Math.floor(phase/3) : 0;
-    return { rows:S[view].concat(snmLegs(view, frame, S.leg)), pal:S.pal, flip };
+    const frame = moving ? Math.floor(phase/3)%4 : 0;
+    return { rows:S[view][frame], pal:S.pal, flip };
+}
+// World units per sprite pixel: the man is SNM_PERSON_WU tall; Tracey uses the
+// same pixel size, so she's naturally a little shorter.
+function snmPersonScale(cz){
+    const s=(SNM_PERSON_WU/SNM_SPR.man.h)*FOCAL/cz;
+    return s>=0.7 ? Math.max(1, Math.round(s)) : s;   // whole pixels up close: 1-px gaps stay crisp
 }
 // Nearest-neighbour scaled blit; (cx, by) = bottom-centre on screen.
 function snmBlit(rows, pal, cx, by, sc, flip){
@@ -7244,7 +7233,9 @@ function snmBlitFrame(fr, cx, by, sc){
         }
     }
 }
-const SNM_PERSON_WU = 2.1;   // a person's drawn height (world units; ~2× life so they read)
+const SNM_PERSON_WU = 3.6;   // the man's drawn height (world units). 3.6 puts his 33-px voxel
+                             // sprite at ~1 screen px per pixel from the walker camera, so the
+                             // white gaps survive; smaller shrinks him and loses detail.
 const SNM_CAR_WU    = 3.4;   // the parked car's drawn width (world units)
 
 // World-space sprites while you're on foot: you, her (if she's with you) and the
@@ -7268,12 +7259,12 @@ function snmDrawFigures(){
     const W=SNM.walker;
     if(W) add(W.x, W.z, (p,cz)=>{
         const f=snmFigure('man', W.yaw, W.phase, W.moving);
-        snmBlit(f.rows, f.pal, p.sx, p.sy, (SNM_PERSON_WU/18)*FOCAL/cz, f.flip);
+        snmBlit(f.rows, f.pal, p.sx, p.sy, snmPersonScale(cz), f.flip);
     });
     const G=SNM.girl;
     if(G && G.state==='follow') add(G.x, G.z, (p,cz)=>{
         const f=snmFigure('girl', G.yaw, G.phase, G.moving);
-        snmBlit(f.rows, f.pal, p.sx, p.sy, (SNM_PERSON_WU*0.95/18)*FOCAL/cz, f.flip);
+        snmBlit(f.rows, f.pal, p.sx, p.sy, snmPersonScale(cz), f.flip);
     });
     items.sort((a,b)=>b.cz-a.cz);
     for(const it of items) it.draw(it.p, it.cz);
@@ -7605,7 +7596,7 @@ function snmScrBellDrawn(S){
         snmRect(157,114,4,4,ZC.BY);                                 // knob
     } else {
         const f=snmFigure('girl', CAM.yaw+180, 0, false);
-        snmBlit(f.rows, Object.assign({}, f.pal, {K:ZC.W}), 128, 180, 4, false);  // white on the dark background
+        snmBlit(f.rows, Object.assign({}, f.pal, {K:ZC.W, W:ZC.K}), 128, 180, 2, false);  // white on the dark background
     }
     snmRect(76,180,104,4,ZC.GR);                       // doorstep
     snmRect(182,98,12,18,ZC.W); snmFrame(182,98,12,18,ZC.K);   // bell push
@@ -7804,8 +7795,8 @@ function snmScrTakeDrawn(S){
     }
     // the man behind the counter (chef's hat)
     const f=snmFigure('man', CAM.yaw+180, 0, false);
-    snmBlit(f.rows, f.pal, 196, 152, 3, false);
-    snmRect(187,88,18,10,ZC.W); snmRect(184,96,24,3,ZC.W);   // chef's hat
+    snmBlit(f.rows.slice(0,14), f.pal, 196, 126, 2, false);     // head to chest, down to the counter
+    snmRect(189,88,14,9,ZC.W); snmRect(186,96,20,3,ZC.W);   // chef's hat
     // counter
     snmRect(0,126,W,4,ZC.W); snmRect(0,130,W,16,ZC.GR);
     for(let x=0;x<W;x+=32) snmRect(x,130,1,16,ZC.K);
@@ -7857,8 +7848,8 @@ function snmScrWinDrawn(S){
     // sofa with the two of you on it
     snmRect(14,100,120,14,ZC.M); snmRect(10,112,128,30,ZC.M); snmFrame(10,112,128,30,ZC.K);
     const m=SNM_SPR.man, g=SNM_SPR.girl;
-    snmBlit(m.back.slice(0,10), m.pal, 50, 112, 2, false);
-    snmBlit(g.back.slice(0,10), g.pal, 94, 112, 2, false);
+    snmBlit(m.back[0].slice(0,10), m.pal, 50, 112, 2, false);   // heads and shoulders over the sofa back
+    snmBlit(g.back[0].slice(0,10), g.pal, 94, 112, 2, false);
     // the takeaway on the table
     snmRect(30,150,90,6,ZC.Y); snmRect(34,156,4,14,ZC.Y); snmRect(112,156,4,14,ZC.Y);
     snmRect(64,138,22,12,ZC.W); snmFrame(64,138,22,12,ZC.K);
@@ -7877,7 +7868,7 @@ function snmScrFail(S){
     snmText8C('NIGHT RUINED', 9, ZC.W, null, 2);
     (SNM_FAIL_TEXT[SNM.fail]||[]).forEach((t,i)=>snmText8C(t, 50+i*12, ZC.W, null));
     const f=snmFigure('girl', CAM.yaw+180, 0, false);
-    snmBlit(f.rows, Object.assign({}, f.pal, {K:ZC.W}), 128, 176, 3, false);  // white on the dark background
+    snmBlit(f.rows, Object.assign({}, f.pal, {K:ZC.W, W:ZC.K}), 128, 176, 2, false);  // white on the dark background
     snmBand(184, 'E: TRY AGAIN  ESC: CRUISE', ZC.BY);
 }
 
