@@ -382,14 +382,19 @@ const DASHBOARD_Y = 96;        // bottom of the play window
 const VIEW_X1     = 223;       // right edge of play window (cyan column beyond)
 
 // ─── On-foot full screen (S32) ───────────────────────────────────────────────
-// Out of the car (Saturday Night), the world view fills the whole 256×192 screen:
-// no cockpit, no cyan column. The normal play window (224×96) is scaled up by
-// FULL_K about its optical centre, so it reads as the same view, closer in.
+// Out of the car (Saturday Night) the cockpit and cyan column go. The normal
+// play window (224×96) sits in the middle of a black screen at its original
+// scale (FULL_K = 1); the objective/timer bar and the prompt line sit on the
+// black border. FULL_K > 1 scales the window up (2 = fills the screen height).
 // Set FULL_ONFOOT=false to keep the dashboard on foot.
 const FULL_ONFOOT = true;
-const FULL_K      = 2;           // 96-px window → 192-px screen
+const FULL_K      = 1;
 const PROJ_STD  = { f:55.4256, cx:110, cy:58 };
-const PROJ_FULL = { f:55.4256*FULL_K, cx:W/2, cy:Math.round(H/2 + (58-96/2)*FULL_K) };
+const FULL_WIN  = (()=>{ const w=Math.min(W, Math.round(224*FULL_K)), h=Math.min(H, Math.round(96*FULL_K));
+                         const x0=Math.floor((W-w)/2), y0=Math.floor((H-h)/2); return { x0, y0, x1:x0+w-1, y1:y0+h-1, w, h }; })();
+const PROJ_FULL = { f:55.4256*FULL_K,
+                    cx:FULL_WIN.x0 + FULL_WIN.w/2 + (110-112)*FULL_K,
+                    cy:FULL_WIN.y0 + FULL_WIN.h/2 + (58-48)*FULL_K };
 function isFullView(){ return FULL_ONFOOT && SNM.active && SNM.onFoot && !SNM.screen; }
 function setProj(P){ FOCAL=P.f; SCREEN_CX=P.cx; SCREEN_CY=P.cy; }
 
@@ -3022,9 +3027,11 @@ function render(){
     const FULL = isFullView();            // S32: on foot, the world fills the screen
     setProj(FULL ? PROJ_FULL : PROJ_STD);
     if(FULL){
-        const hz = Math.round(PROJ_FULL.cy - (58-HORIZON_Y)*FULL_K);   // same sky line, scaled
-        for(let y=0;y<hz;y++) for(let x=0;x<W;x++) px(x,y,COL.BLUE);
-        for(let y=hz;y<H;y++) for(let x=0;x<W;x++) px(x,y,COL.WHITE);
+        const F=FULL_WIN, hz = Math.round(PROJ_FULL.cy - (58-HORIZON_Y)*FULL_K);   // same sky line
+        for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+            const inWin = x>=F.x0 && x<=F.x1 && y>=F.y0 && y<=F.y1;
+            px(x,y, !inWin ? COL.BLACK : y<hz ? COL.BLUE : COL.WHITE);
+        }
     } else {
     // ── Original four-band fixed layout (from road_vp22.html) ──
     // blue sky above the play window
@@ -3043,7 +3050,7 @@ function render(){
     // are tall and must be free to draw up into the blue sky band, which has
     // already been painted above as their backdrop. Clipping the ceiling at
     // HORIZON_Y was slicing every tall object flat along the skyline.
-    if(FULL) setClip(0, 0, W-1, H-1); else setClip(0, 0, VIEW_X1, DASHBOARD_Y-1);
+    if(FULL) setClip(FULL_WIN.x0, FULL_WIN.y0, FULL_WIN.x1, FULL_WIN.y1); else setClip(0, 0, VIEW_X1, DASHBOARD_Y-1);
 
     // ── St Chad's Park: a green filled region on the ground, drawn first so the
     // roads (drawn after) sit on top of it. The polygon is clipped against the
@@ -3290,7 +3297,11 @@ function render(){
     if(!(SNM.active && SNM.onFoot)) drawCar();   // on foot, the car is a world sprite instead
     resetClip();
 
-    if(!FULL) paintDashboard();   // full cockpit art + scrolling map panel + road name
+    if(FULL){                     // re-black the border: some sprites ignore the clip
+        const F=FULL_WIN;
+        for(let y=0;y<H;y++) for(let x=0;x<W;x++)
+            if(x<F.x0 || x>F.x1 || y<F.y0 || y>F.y1) px(x,y,COL.BLACK);
+    } else paintDashboard();      // full cockpit art + scrolling map panel + road name
     setProj(PROJ_STD);            // anything outside render() sees the normal projection
     if(SNM.active) snmDrawHUD();
 
