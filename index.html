@@ -3859,6 +3859,7 @@ $('back-map').addEventListener('click', ()=>{
 //  ADVANCED. exportBuildData() and jedOpen() are unchanged and still exported.)
 
 function showGame(){
+    if(COMING_SOON.on){ comingShow(); return; }   // placeholder build: no driving yet
     menuEl.style.display='none';
     statusEl.style.display='none';
     gameEl.style.display='flex';
@@ -5824,7 +5825,56 @@ function modePick(n){
     stepsEl.style.display = 'none';
     // S28: the CONTROLS screen, then the drive (Saturday Night: then its briefing)
     CTRL_MODE = n;
-    stepsShow(()=>{ showGame(); if(n===2) snmStart(); }, ctrlPaint);
+    stepsShow(()=>{ showGame(); if(n===2 && !COMING_SOON.on) snmStart(); }, ctrlPaint);
+}
+// ─── COMING SOON placeholder ───────────────────────────────────────────────
+// While COMING_SOON.on is true the whole front end works (city select, builds,
+// road screen, game mode, controls) but the moment the drive would start,
+// showGame() shows this screen instead. Any key / click / pad button goes back
+// to SELECT A CITY. Set on:false to release the game. Change the date in text.
+const COMING_SOON = { on:true, title:'COMING', text:'XMAS 2025' };
+const CM_GREEN = '#00C000', CM_BLACK = '#000000', CM_WHITE = '#FFFFFF';
+let CM_SNOW = [];
+// ROM-font text drawn at 2x (each font pixel a 2x2 block), centred on x 128.
+function zxBigCentre(ctx, str, row, ink, paper){
+    str = String(str).toUpperCase();
+    const x0 = 128 - str.length*8, y0 = row*8;
+    for(let i=0;i<str.length;i++){
+        const g = ZXFONT[str[i]] || ZXFONT[' '];
+        for(let y=0;y<8;y++) for(let x=0;x<8;x++){
+            ctx.fillStyle = ((g[y]>>(7-x))&1) ? ink : paper;
+            ctx.fillRect(x0+i*16+x*2, y0+y*2, 2, 2);
+        }
+    }
+}
+function comingPaint(){
+    sctx.fillStyle = CM_GREEN; sctx.fillRect(0,0,256,192);
+    // light ZX snowfall behind the text
+    if(!CM_SNOW.length) for(let i=0;i<46;i++) CM_SNOW.push({x:Math.random()*256, y:Math.random()*192, v:0.4+Math.random()*0.8});
+    sctx.fillStyle = CM_WHITE;
+    for(const f of CM_SNOW){
+        f.y += f.v; f.x += Math.sin((f.y+f.v*50)/14)*0.3;
+        if(f.y>192){ f.y=0; f.x=Math.random()*256; }
+        sctx.fillRect(f.x|0, f.y|0, 1, 1);
+    }
+    zxCentre(sctx, (MAP_NAME||'TURBO SPIRIT').slice(0,30), ROW_HEAD, CM_BLACK, CM_GREEN);
+    zxBigCentre(sctx, COMING_SOON.title, 9,  CM_BLACK, CM_GREEN);
+    zxBigCentre(sctx, COMING_SOON.text,  13, CM_BLACK, CM_GREEN);
+    zxCentre(sctx, 'THANKS FOR LOOKING', 18, CM_BLACK, CM_GREEN);
+    if(STEPS.blink < 20){
+        const prompt = PAD_USED ? 'PRESS A' : (IS_TOUCH ? 'TAP TO GO BACK' : 'PRESS ANY KEY');
+        zxCentre(sctx, prompt, ROW_ENTER, CM_BLACK, CM_GREEN);
+    }
+}
+function comingShow(){
+    // Deferred one tick: a built-in map calls loadSnapshot() (-> showGame) and then
+    // modeShow() straight after, so if the mode screen has just opened we stand down
+    // and let the player carry on through the options first.
+    setTimeout(()=>{
+        if(MODE.open || STEPS.open) return;
+        snmQuit(true);
+        stepsShow(()=>{ MAP_LOADED = false; $('back').click(); }, comingPaint);
+    }, 0);
 }
 function modeBack(){
     if(!MODE.open) return;
