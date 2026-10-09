@@ -3769,7 +3769,8 @@ function modePick(n){
     stepsEl.style.display = 'none';
     // S28: the CONTROLS screen, then the drive (Saturday Night: then its briefing)
     CTRL_MODE = n;
-    stepsShow(()=>{ showGame(); if(n===2) snmStart(); }, ctrlPaint);
+    // S34 demo: CRUISE MODE → the demo info screen → CONTROLS → the drive
+    stepsShow(()=>stepsShow(()=>{ showGame(); if(n===2) snmStart(); }, ctrlPaint), demoInfoPaint);
 }
 function modeBack(){
     if(!MODE.open) return;
@@ -6122,6 +6123,36 @@ function sitePadFound(){
     siteStartDemo();
 }
 window.addEventListener('gamepadconnected', ()=>setTimeout(sitePadFound, 150));
+
+// ── Cruise-mode demo info (shown after CRUISE MODE, before CONTROLS) ────────
+// Yellow paper like SELECT GAME MODE and CONTROLS; drawn on the steps canvas
+// and driven by the same STEPS machinery (any key / click / tap / pad A goes on).
+const DEMO_INFO = [
+    'IN THIS DEMO YOU CAN DRIVE',
+    'AROUND THE "ESSEX FOREST" MAP,',
+    'MADE FROM GEO DATA OF THE',
+    'EPPING FOREST AREA.',
+    '',
+    'IN THE FULL GAME YOU WILL BE',
+    'ABLE TO SELECT ANYWHERE IN THE',
+    'WORLD, CREATE MAPS AND DRIVE',
+    'AROUND.',
+    '',
+    'USE THE HANDBRAKE TO MAKE',
+    'TIGHT TURNS.',
+    '',
+    'CURRENTLY NO COLLISION',
+    'DETECTION ADDED.',
+];
+function demoInfoPaint(){
+    sctx.fillStyle = MD_YELLOW; sctx.fillRect(0, 0, 256, 192);
+    zxCentre(sctx, 'CRUISE MODE', 2, MD_BLACK, MD_YELLOW);
+    DEMO_INFO.forEach((l, i)=>{ if(l) zxCentre(sctx, l, 5 + i, MD_BLACK, MD_YELLOW); });
+    if(STEPS.blink < 20){
+        const prompt = PAD_USED ? 'PRESS A' : (IS_TOUCH ? 'TAP TO START' : 'PRESS ANY KEY');
+        zxCentre(sctx, prompt, 22, MD_BLACK, MD_YELLOW);
+    }
+}
 
 titleLoad();
 
