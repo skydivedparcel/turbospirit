@@ -148,8 +148,8 @@ body.touch #map {
 #site-count { width:calc(var(--u)*5.5); height:calc(var(--u)*.625); align-self:center;
     image-rendering:pixelated; image-rendering:crisp-edges; }
 
-/* 4 · timer to release: big seven-segment clock (256×56 canvas at 3×) */
-#site-timer { width:calc(var(--u)*32); height:calc(var(--u)*7); margin-top:calc(var(--u)*3);
+/* 4 · timer to release: big seven-segment clock (256×64 canvas at 3×) */
+#site-timer { width:calc(var(--u)*32); height:calc(var(--u)*8); margin-top:calc(var(--u)*3);
     image-rendering:pixelated; image-rendering:crisp-edges; }
 #site .when { margin:calc(var(--u)*3) 0 0; }
 #site.pg-timer #site-count { visibility:hidden; }   /* the big clock is showing */
@@ -5986,7 +5986,7 @@ function siteRender(){
           + '<p class="rom prompt">'+(IS_TOUCH ? 'TAP A VIDEO' : 'ENTER 1 OR 2')+'</p>';
     } else if(P==='timer'){
         h = '<h2 class="rom st">TIMER</h2>'
-          + '<canvas id="site-timer" width="256" height="56" role="timer" aria-label="Time until release"></canvas>'
+          + '<canvas id="site-timer" width="256" height="64" role="timer" aria-label="Time until release"></canvas>'
           + '<p class="rom when">19 NOVEMBER 2026</p>';
     } else if(P==='pad'){
         h = '<h2 class="rom st">PLAY DEMO</h2>'
