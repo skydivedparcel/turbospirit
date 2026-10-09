@@ -105,51 +105,14 @@ body.touch #stage { flex-direction:column; align-items:center; gap:4px; }
 body.touch #c { width:100vw; height:75vw; }
 body.touch #map {
     width:auto; max-width:100vw;
-    height:calc(100vh - 75vw - 160px); height:calc(100dvh - 75vw - 160px);
+    height:calc(100vh - 75vw - 8px); height:calc(100dvh - 75vw - 8px);   /* S34: no pedal bar any more */
     border:none; object-fit:contain;   /* keep the map's shape when it's squeezed */
 }
 @media (orientation: landscape){
     body.touch #title-canvas, body.touch #city-canvas, body.touch #opts-canvas,
     body.touch #c { width:auto; height:100vh; height:100dvh; }
     body.touch #map { display:none; }
-    body.touch #tpad { background:transparent; border-top:none; }
 }
-#tpad {
-    display:none; position:fixed; left:0; right:0; bottom:0; z-index:9000;
-    height:150px; padding:16px 12px calc(10px + env(safe-area-inset-bottom));
-    background:#000;
-    /* the Spectrum rainbow along the top edge of the control bar */
-    background-image:linear-gradient(#D80000 0 3px, #D8D800 3px 6px, #00D800 6px 9px, #00D8D8 9px 12px, transparent 12px);
-    justify-content:space-between; align-items:flex-end;
-    touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
-}
-#tpad.on { display:flex; }
-#tpad .grp { display:flex; gap:8px; align-items:flex-end; }
-/* Spectrum attribute blocks: solid PAPER colour, ROM-font INK label, square
-   corners. Pressing swaps ink and paper (inverse video), the way the Spectrum
-   marked a highlighted line. Each label is drawn twice (normal + inverse). */
-.tp {
-    width:92px; height:116px; display:flex; align-items:center; justify-content:center;
-    touch-action:none; outline:4px solid #000; outline-offset:-4px;
-}
-.tp.go { background:#00D800; }
-.tp.st { background:#D80000; }
-.tp.hb { background:#D8D800; width:120px; }
-.tp .lbl { display:flex; flex-direction:column; align-items:center; gap:6px; }
-.tp .lbl.inv { display:none; }
-.tp.down { background:#000; }
-.tp.go { outline-color:#00D800; } .tp.st { outline-color:#D80000; } .tp.hb { outline-color:#D8D800; }
-.tp.down .lbl.norm { display:none; }
-.tp.down .lbl.inv  { display:flex; }
-#tp-menu {
-    display:none; position:fixed; top:6px; right:6px; z-index:9001;
-    background:#000; padding:6px 5px; outline:2px solid #00D8D8; outline-offset:-2px;
-    touch-action:manipulation;
-}
-#tp-menu.on { display:block; }
-#tp-menu:active { background:#00D8D8; }
-#tp-tilt { position:fixed; top:6px; left:6px; z-index:9001; display:none;
-    font:bold 11px monospace; color:#000; background:#C0C000; padding:4px 6px; }
 /* ── turbospirit.world holding pages (S34) ───────────────────────────────
    Same 768×576 viewport, green paper and ROM font as the menu screens.
    --u is one character cell (8 Spectrum pixels): 24px on desktop. */
@@ -191,14 +154,9 @@ body.touch #map {
 #site .when { margin:calc(var(--u)*3) 0 0; }
 #site.pg-timer #site-count { visibility:hidden; }   /* the big clock is showing */
 
-/* demo drive on a phone: TRY THE HANDBRAKE tag sitting on the HAND BRAKE pedal */
-#demo-hb { display:none; position:fixed; z-index:9002; transform:translate(-50%,-100%);
-    font-family:"ZX ROM", monospace; font-size:16px; line-height:16px; text-align:center;
-    color:#fff; background:#C00000; padding:4px 6px; pointer-events:none; animation:demobob .4s steps(1) infinite; }
-#demo-hb span { position:absolute; left:50%; top:100%; transform:translateX(-50%); color:#FF0000; font-size:24px; line-height:24px; }
-#demo-hb.on { display:block; }
-body:not(.driving) #demo-hb { display:none; }
-@keyframes demobob { 50% { margin-top:3px; } }
+/* phone without a controller: the PLAY DEMO page */
+#site .padmsg { margin-top:calc(var(--u)*2); text-align:center; display:flex; flex-direction:column; gap:calc(var(--u)*.6); }
+#site .padmsg .blink { animation:zxblink 0.8s steps(1) infinite; margin-top:var(--u); }
 
 /* 5 · about: plain centred text, like the foot of the poster */
 #site .about { width:calc(var(--u)*28); margin-top:calc(var(--u)*.75); text-align:center;
@@ -216,34 +174,27 @@ body.touch #site .about { font-size:max(14px, calc(var(--u)*.67)); }
 body.touch #site .about b.rom { font-size:max(14px, calc(var(--u)*.67)); }
 body.touch #site .about .small { font-size:max(11px, calc(var(--u)*.45)); }
 @media (orientation: landscape){
-    body.touch #site { --u:calc(min(100vw, 133.333vh) / 32); width:calc(var(--u)*32); height:100vh; height:100dvh; overflow:auto; }
+    body.touch #site { --u:calc(min(100vw, 133.333vh) / 32); width:calc(var(--u)*32); height:100vh; height:100dvh; min-height:0; overflow:auto; }
     body.touch #site.pg-poster .poster img { width:auto; height:100%; }
 }
 
-/* 5 · the story: scrolls inside the screen on desktop */
-#site.pg-story #site-body { min-height:0; }
-#site .about { overflow-y:auto; flex:1 1 auto; min-height:0; padding:0 calc(var(--u)*.5) var(--u); scrollbar-width:thin; scrollbar-color:#000 #00C000; }
-#site .about h3 { margin:calc(var(--u)*.9) 0 calc(var(--u)*.5); font-size:calc(var(--u)*.67); line-height:1; }
-#site .about:focus-visible { outline:none; }
-body.touch #site .about { overflow:visible; }
-body.touch #site .about h3 { font-size:max(14px, calc(var(--u)*.67)); }
-
-/* 5 · the story, set like a page of a book: serif, justified, indented */
-#site .book { width:calc(var(--u)*25); margin-top:calc(var(--u)*.6); overflow-y:auto; flex:1 1 auto; min-height:0;
-    padding:0 calc(var(--u)*.25) calc(var(--u)*.5);
-    font:calc(var(--u)*.875)/1.55 "IBM Plex Serif", Georgia, "Times New Roman", serif;
-    text-align:justify; hyphens:auto; -webkit-hyphens:auto; scrollbar-width:thin; scrollbar-color:#000 #00C000; }
-#site .book p { margin:0; text-indent:1.6em; }
+/* the story: Spectrum ROM font set like a page of a book — ragged right
+   (justifying a fixed-width font only stretches the word gaps), first-line indents, no gaps between paragraphs, a drop cap, centred ornaments */
+#site .book { width:calc(var(--u)*26); margin-top:calc(var(--u)*.6); overflow-y:auto; flex:1 1 auto; min-height:0;
+    padding:0 calc(var(--u)*.25) var(--u);
+    font-family:"ZX ROM", monospace; font-size:calc(var(--u)*.667); line-height:1.6;
+    text-align:left; -webkit-font-smoothing:none;
+    scrollbar-width:thin; scrollbar-color:#000 #00C000; }
+#site .book p { margin:0; text-indent:2em; }
 #site .book p.first { text-indent:0; }
-#site .book p + p { margin-top:calc(var(--u)*.35); }
-#site .book b.rom { font-size:calc(var(--u)*.75); line-height:1; letter-spacing:0; display:inline-block; text-indent:0; }
-#site .book .drop { float:left; font-size:calc(var(--u)*2.5); line-height:1; margin:calc(var(--u)*.2) calc(var(--u)*.3) 0 0; }
+#site .book .drop { float:left; font-size:2.6em; line-height:1; margin:.2em .3em 0 0; }
 #site .book .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
-#site .book .fin { text-align:center; text-indent:0; margin-top:calc(var(--u)*.5); font-size:calc(var(--u)*.75); }
+#site .book .orn { text-align:center; text-align-last:center; text-indent:0; margin:.8em 0; }
+#site .book .note { margin-top:.4em; }
 #site .book:focus-visible { outline:none; }
-body.touch #site .book { width:calc(100vw - var(--u)*3); overflow:visible; font-size:max(17px, calc(var(--u)*.875)); }
-body.touch #site .book b.rom { font-size:max(14px, calc(var(--u)*.75)); }
-body.touch #site .book .drop { font-size:max(48px, calc(var(--u)*2.5)); }
+body.touch #site .book { width:calc(var(--u)*29);   /* the green screen is 32 cells wide, sideways too */
+    overflow:visible; font-size:max(13px, calc(var(--u)*.667));
+    text-align:left; }
 </style>
 </head>
 <body>
@@ -270,7 +221,6 @@ body.touch #site .book .drop { font-size:max(48px, calc(var(--u)*2.5)); }
     <div id="site-top"><button id="site-back" type="button">&lt; MENU</button><canvas id="site-count" width="44" height="5" role="img" aria-label="Time until release"></canvas></div>
     <div id="site-body"></div>
 </div>
-<div id="demo-hb" aria-hidden="true">TRY THE<br>HANDBRAKE<span>↓</span></div>
 <div id="game">
 <div id="stage">
     <canvas id="c" width="256" height="192"></canvas>
@@ -281,17 +231,6 @@ body.touch #site .book .drop { font-size:max(48px, calc(var(--u)*2.5)); }
      existing click handlers still drive navigation from the options menu. -->
 <button id="back"     style="display:none"></button>
 </div>
-
-<!-- ── Phone driving controls (Session 24): shown only on touch devices while driving ── -->
-<div id="tpad">
-    <div class="grp">
-        <div class="tp st" id="tp-brake" data-l="BRAKE"></div>
-        <div class="tp go" id="tp-accel" data-l="ACCEL"></div>
-    </div>
-    <div class="tp hb" id="tp-hb" data-l="HAND|BRAKE"></div>
-</div>
-<div id="tp-menu" data-l="MENU"></div>
-<div id="tp-tilt">TILT OFF &middot; TAP TO ENABLE</div>
 
 <!-- ── Options screen: Spectrum-style, opened with Start / Esc ── -->
 <div id="opts">
@@ -1200,7 +1139,6 @@ function updateCar(){
     if(keys['shift'])                 INPUT.handbrake = true;  // keyboard handbrake
     if(keys[' '])                     INPUT.reset = true;
     readGamepad();
-    readTouchControls();   // phone: on-screen pedals + tilt steering
     ACCEL_SND.drove = true;   // S29: the acceleration sound only plays while the car is driven
 
     // ── reset (Space / Start) — snap back to spawn, clear all motion ──
@@ -3079,33 +3017,6 @@ function zxCentre(ctx,str,row,ink,paper){
     zxText(ctx,str,Math.floor((32-String(str).length)/2),row,ink,paper);
 }
 
-// Render a short string with the real 8x8 ROM font onto a standalone canvas,
-// scaled up with NO smoothing so it stays blocky — the same lettering the intro
-// screen uses, but usable inside HTML chrome (legend/toolbar). ink/paper are CSS
-// colours; paper can be 'transparent' to sit on the yellow paper directly.
-function zxLabelCanvas(str, scale, ink, paper){
-    str = String(str).toUpperCase();
-    const cv = document.createElement('canvas');
-    cv.width = str.length*8*scale; cv.height = 8*scale;
-    const c = cv.getContext('2d');
-    c.imageSmoothingEnabled = false;
-    if(paper && paper!=='transparent'){ c.fillStyle=paper; c.fillRect(0,0,cv.width,cv.height); }
-    for(let i=0;i<str.length;i++){
-        const g = ZXFONT[str[i]] || ZXFONT[' '];
-        for(let y=0;y<8;y++){
-            const bits=g[y];
-            for(let x=0;x<8;x++){
-                if((bits>>(7-x))&1){
-                    c.fillStyle=ink;
-                    c.fillRect((i*8+x)*scale, y*scale, scale, scale);
-                }
-            }
-        }
-    }
-    cv.style.imageRendering='pixelated';
-    cv.style.verticalAlign='middle';
-    return cv;
-}
 
 // ─── ZX Spectrum tape-loading effect (border stripes + screech) ──────────────
 // Recreates the look and sound of a Spectrum loading from tape while we fetch
@@ -3293,7 +3204,7 @@ function csClear(){ cctx.fillStyle=CS_GREEN; cctx.fillRect(0,0,256,192); }
 // DD:HH:MM:SS release clock sits top right.
 const SITE_MENUS = {
     main: { head:'SELECT AN OPTION',
-            items:['ANNOUNCEMENT','VIDEOS','PLAY DEMO','TIMER TO RELEASE','THE STORY'] },
+            items:['THE STORY','ANNOUNCEMENT','VIDEOS','PLAY DEMO','TIMER'] },
 };
 function CS_N(){ return SITE_MENUS[CS.menu||'main'].items.length; }
 function csPaint(){
@@ -3366,12 +3277,12 @@ function csTypeStep(){
 function csChoose(n){
     if(!CS.ready || CS.custom) return;
     if(n<1 || n>CS_N()) return;
-    if(n===3){                                       // PLAY DEMO: Essex Forest, drive only
-        ZXLOAD.prime();                              // unlock audio on this user gesture
-        if(EMBED_MAPS.essexforest) loadEmbeddedMap('essexforest');
+    if(n===4){                                       // PLAY DEMO: Essex Forest, drive only
+        if(siteNeedsPad() && !sitePadConnected()){ siteShow('pad'); return; }   // phones: controller only
+        siteStartDemo();
         return;
     }
-    siteShow(['poster','videos',null,'timer','story'][n-1]);
+    siteShow(['story','poster','videos',null,'timer'][n-1]);
 }
 
 // Key + click handling for the whole city screen.
@@ -5937,130 +5848,24 @@ function optsPadPoll(){
 }
 requestAnimationFrame(optsPadPoll);
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  PHONE CONTROLS (Session 24): tilt steering + on-screen pedals
-//  Only active on touch devices (IS_TOUCH). Feeds INPUT the same way the
-//  gamepad does, so the driving model is unchanged.
-//
-//  Tilt: hold the phone upright and turn it like a steering wheel. We rebuild
-//  the gravity direction from the orientation angles (beta, gamma) and measure
-//  how far the SCREEN's left-right axis has dipped. That reads correctly
-//  whether the phone is held upright, leaned back, or turned to landscape,
-//  and needs no calibration: level = straight ahead.
-// ═══════════════════════════════════════════════════════════════════════════
-const TILT = {
-    FULL_DEG: 14,     // tilt for full lock (S24b: was 25; halved the travel = twice as responsive)
-    DEAD_DEG: 3,      // ignore small wobbles around level
-    SMOOTH:   0.6,    // 0..1 low-pass on the raw reading (higher = less lag)
-    steer: 0, raw: 0, live: false,
-};
-const TOUCH = { accel:false, brake:false, hb:false };
-
-function tiltScreenAngle(){
-    if(screen.orientation && typeof screen.orientation.angle==='number') return screen.orientation.angle;
-    return (typeof window.orientation==='number') ? window.orientation : 0;
-}
-function onTilt(e){
-    if(e.beta==null || e.gamma==null) return;
-    TILT.live = true;
-    const d2r = Math.PI/180, b=e.beta*d2r, g=e.gamma*d2r;
-    // "up" direction expressed in the phone's own x/y axes
-    const ux = -Math.cos(b)*Math.sin(g), uy = Math.sin(b);
-    const a = tiltScreenAngle()*d2r;
-    // screen x-axis in phone axes is (cos a, -sin a); dip of the right edge:
-    const dip = -(ux*Math.cos(a) - uy*Math.sin(a));
-    const deg = Math.asin(Math.max(-1, Math.min(1, dip))) / d2r;
-    let v = 0;
-    if(Math.abs(deg) > TILT.DEAD_DEG)
-        v = Math.sign(deg) * Math.min(1, (Math.abs(deg)-TILT.DEAD_DEG)/(TILT.FULL_DEG-TILT.DEAD_DEG));
-    TILT.raw += (v - TILT.raw) * TILT.SMOOTH;
-    TILT.steer = Math.abs(TILT.raw) < 0.01 ? 0 : TILT.raw;
-}
-
-// iPhone/iPad: tilt data needs permission, asked from inside a tap. Android
-// just starts sending events.
-let TILT_ASKED = false;
-function tiltEnable(){
-    if(TILT_ASKED) return;
-    TILT_ASKED = true;
-    const D = window.DeviceOrientationEvent;
-    if(D && typeof D.requestPermission === 'function'){
-        D.requestPermission().then(r=>{
-            if(r==='granted') window.addEventListener('deviceorientation', onTilt);
-            else TILT_ASKED = false;           // let a later tap offer it again
-        }).catch(()=>{ TILT_ASKED = false; });
-    } else {
-        window.addEventListener('deviceorientation', onTilt);
-    }
-}
-
-function readTouchControls(){
-    if(!IS_TOUCH) return;
-    if(TOUCH.accel) INPUT.throttle = Math.max(INPUT.throttle, 1);
-    if(TOUCH.brake) INPUT.brakeRev = Math.max(INPUT.brakeRev, 1);
-    if(TOUCH.hb)    INPUT.handbrake = true;
-    if(TILT.steer)  INPUT.steer = Math.max(-1, Math.min(1, INPUT.steer + TILT.steer));
-}
 
 if(IS_TOUCH){
     document.body.classList.add('touch');
-    // first tap anywhere (usually the title screen) asks for tilt
-    document.addEventListener('touchend', tiltEnable, {capture:true});
-    document.addEventListener('click',    tiltEnable, {capture:true});
-
-    // hold-to-press buttons; pointer capture keeps a press alive if the thumb slides
-    const bindHold = (id, key) => {
-        const el = $(id);
-        const on  = e => { e.preventDefault(); TOUCH[key]=true;  el.classList.add('down');
-                           try{ el.setPointerCapture(e.pointerId); }catch(_){} };
-        const off = () => { TOUCH[key]=false; el.classList.remove('down'); };
-        el.addEventListener('pointerdown', on);
-        el.addEventListener('pointerup', off);
-        el.addEventListener('pointercancel', off);
-        el.addEventListener('lostpointercapture', off);
-        el.addEventListener('contextmenu', e=>e.preventDefault());
-    };
-    // ROM-font labels: ink colours per button, drawn once normal and once inverse
-    const INK = { 'tp-accel':['#000000','#00D800'], 'tp-brake':['#FFFFFF','#D80000'], 'tp-hb':['#000000','#D8D800'] };
-    for(const id in INK){
-        const el = $(id);
-        for(const [cls, ink] of [['norm', INK[id][0]], ['inv', INK[id][1]]]){
-            const box = document.createElement('div'); box.className = 'lbl '+cls;
-            for(const line of el.dataset.l.split('|')) box.appendChild(zxLabelCanvas(line, 2, ink, 'transparent'));
-            el.appendChild(box);
-        }
-    }
-    $('tp-menu').appendChild(zxLabelCanvas('MENU', 1, '#00D8D8', 'transparent'));
-
-    bindHold('tp-accel','accel');
-    bindHold('tp-brake','brake');
-    bindHold('tp-hb','hb');
-    $('tp-menu').addEventListener('click', ()=>{ TOUCH.accel=TOUCH.brake=TOUCH.hb=false; optsOpen(); });
-    $('tp-tilt').addEventListener('click', ()=>{ TILT_ASKED=false; tiltEnable(); });
-
-    // show the pad only while driving
-    const tpad = $('tpad'), tiltNote = $('tp-tilt');
-    setInterval(()=>{
-        const driving = MAP_LOADED && gameEl.style.display!=='none';
-        tpad.classList.toggle('on', driving);
-        $('tp-menu').classList.toggle('on', driving);
-        document.body.classList.toggle('driving', driving);
-        tiltNote.style.display = (driving && !TILT.live) ? 'block' : 'none';
-        if(!driving){ TOUCH.accel=TOUCH.brake=TOUCH.hb=false;
-            for(const b of tpad.querySelectorAll('.tp')) b.classList.remove('down'); }
-    }, 150);
+    // S34: no on-screen pedals or tilt steering; on a phone the demo is played
+    // with a controller. body.driving still locks the page while driving.
+    setInterval(()=>{ document.body.classList.toggle('driving', MAP_LOADED && gameEl.style.display!=='none'); }, 150);
 }
 
 // ── Boot ── title screen first; it hands off to csStartIntro() on the first click.
 // ════════════════════════════════════════════════════════════════════════
 //  TURBOSPIRIT.WORLD HOLDING SITE (S34)
 //  Title screen → SELECT AN OPTION (the city list, re-labelled) →
-//    1 ANNOUNCEMENT      the owner's animated poster
-//    2 VIDEOS            the two YouTube videos, embedded
-//    3 PLAY DEMO         Essex Forest, CRUISE only, no map editing
-//    4 TIMER TO RELEASE  a big digital DD:HH:MM:SS clock
-//    5 THE STORY         the box text, set like a page of a book
-//  Pages 1, 2, 4 and 5 are HTML on the same green paper and ROM font as the
+//    1 THE STORY         the box text in the ROM font, set like a page of a book
+//    2 ANNOUNCEMENT      the owner's animated poster
+//    3 VIDEOS            the two YouTube videos, embedded
+//    4 PLAY DEMO         Essex Forest, CRUISE only, no map editing (phones: controller only)
+//    5 TIMER             a big digital DD:HH:MM:SS clock to the release
+//  Pages 1, 2, 3 and 5 are HTML on the same green paper and ROM font as the
 //  menu (#site), so the videos can play. A small release clock sits top right.
 //  In the demo drive: "EARLY DEMO - NOT FINAL GAME" and a TRY THE HANDBRAKE
 //  pointer until the player has tried a handbrake turn.
@@ -6180,17 +5985,30 @@ function siteRender(){
           + '</div>'
           + '<p class="rom prompt">'+(IS_TOUCH ? 'TAP A VIDEO' : 'ENTER 1 OR 2')+'</p>';
     } else if(P==='timer'){
-        h = '<h2 class="rom st">TIMER TO RELEASE</h2>'
+        h = '<h2 class="rom st">TIMER</h2>'
           + '<canvas id="site-timer" width="256" height="56" role="timer" aria-label="Time until release"></canvas>'
           + '<p class="rom when">19 NOVEMBER 2026</p>';
+    } else if(P==='pad'){
+        h = '<h2 class="rom st">PLAY DEMO</h2>'
+          + '<div class="padmsg rom">'
+          + '<p>THE DEMO IS PLAYED WITH</p><p>A CONTROLLER ON PHONES</p><p>AND TABLETS.</p>'
+          + '<p>&nbsp;</p>'
+          + '<p>CONNECT A BLUETOOTH GAMEPAD</p><p>THEN PRESS ANY BUTTON ON IT</p>'
+          + '<p class="blink">WAITING FOR CONTROLLER</p>'
+          + '</div>';
     } else if(P==='story'){
         h = '<h2 class="rom st">THE STORY</h2>'
           + '<div class="book" tabindex="0">'
-          + '<p class="first"><span class="drop rom" aria-hidden="true">A</span><span class="sr">A</span>fter a hard week\'s graft clearing the streets of drug-gang scum, it\'s time to kick back and enjoy the weekend.</p>'
-          + '<p><b class="rom">CRUISE ANYWHERE</b> &ndash; Take the Turbo Esprit out for a spin. Anywhere. Literally.</p>'
-          + '<p><b class="rom">SATURDAY NIGHT MODE</b> &ndash; Or take on the real challenge. Race down the video shop to grab the latest release before it\'s gone, collect a takeaway from your favourite local, then pick up your girlfriend for a well-earned night in.</p>'
+          + '<p class="first"><span class="drop" aria-hidden="true">A</span><span class="sr">A</span>fter a hard week\'s graft clearing the streets of drug-gang scum, it\'s time to kick back and enjoy the weekend.</p>'
+          + '<p>Cruise Anywhere &ndash; take the Turbo Esprit out for a spin. Anywhere. Literally.</p>'
+          + '<p>Saturday Night Mode &ndash; or take on the real challenge. Race down the video shop to grab the latest release before it\'s gone, collect a takeaway from your favourite local, then pick up your girlfriend for a well-earned night in.</p>'
           + '<p>Put your driving skills to the real test. Get back before your takeaway\'s cold without stressing your girl out, and you\'ll have a Saturday night to remember.</p>'
-          + '<p class="fin rom" aria-hidden="true">* * *</p>'
+          + '<p class="orn" aria-hidden="true">* * *</p>'
+          + '<p class="first">1986, a classic was born. That classic inspired a generation.</p>'
+          + '<p>2026, this classic is reimagined for your browser. Literally cruise anywhere in a Turbo Esprit-inspired world, built by you from real-life geo data.</p>'
+          + '<p>Let your spirit take you!</p>'
+          + '<p class="orn">turbospirit.world</p>'
+          + '<p class="first note">Turbo Spirit: Cruise Anywhere is a fan-made, bedroom-coded, HTML-based driving game inspired by the 1986 classic Turbo Esprit by Mike Richardson / Durell Software. It is a non-commercial tribute by a solo hobbyist, not affiliated with or endorsed by the original creators or rights holders. No infringement intended &ndash; made for love of the original.</p>'
           + '</div>';
     }
     siteBody.innerHTML = h;
@@ -6226,7 +6044,8 @@ function sitePadPoll(){
             const b = i => !!(gp.buttons[i] && gp.buttons[i].pressed);
             const nw = i => b(i) && !SITE_PAD.prev[i];
             const ay = Math.abs(gp.axes[1]||0)>0.5 ? Math.sign(gp.axes[1]) : 0;
-            if(nw(1) || nw(9)) siteClose();
+            if(SITE.page==='pad' && !nw(1) && gp.buttons.some((x,i)=>x.pressed && !SITE_PAD.prev[i])){ SITE_PAD.prev = gp.buttons.map(x=>x.pressed); sitePadFound(); }
+            else if(nw(1) || nw(9)) siteClose();
             else if(SITE.page==='videos' && (nw(12) || nw(13) || (ay && !SITE_PAD.ay))) siteVideo(SITE.vid ? 0 : 1);
             else if(SITE.page==='story' && (b(12) || b(13) || ay)) siteScroll((b(12) || ay<0) ? -0.15 : 0.15);
             SITE_PAD.prev = gp.buttons.map(x=>x.pressed); SITE_PAD.ay = ay;
@@ -6245,12 +6064,10 @@ setInterval(()=>{
 // ── Demo drive overlay ─────────────────────────────────────────────────────
 // Drawn on the game canvas after each frame (render() → putImageData → here).
 // Top of the play window: EARLY DEMO - NOT FINAL GAME. Bottom: a bobbing
-// TRY THE HANDBRAKE pointer, aimed down; on a phone it is an HTML tag sitting
-// on the HAND BRAKE pedal instead. Both pointers go once the player has held
-// a handbrake turn for about a second and a half.
+// TRY THE HANDBRAKE pointer (the pad's face buttons, A flashing). It goes once
+// the player has held a handbrake turn for about a second and a half.
 const DEMO = { hbFrames:0, tried:false, t:0 };
 const DEMO_TRY_FRAMES = 30;                       // 1.5 s at 20 Hz
-const demoPtr = $('demo-hb');
 function siteDemoOverlay(){
     DEMO.t++;
     if(SNM.active) return;
@@ -6260,7 +6077,6 @@ function siteDemoOverlay(){
         if(++DEMO.hbFrames >= DEMO_TRY_FRAMES) DEMO.tried = true;
     }
     const show = !DEMO.tried;
-    if(IS_TOUCH){ demoPtrPlace(show); return; }
     if(!show) return;
     // Bottom-left corner, clear of the car (which sits bottom-centre): a corner
     // of the pad with its four face buttons in a diamond, like the CONTROLS
@@ -6286,16 +6102,26 @@ function siteDemoOverlay(){
     zxText(ctx, 'HANDBRAKE', tx/8, 68/8, Y, K);
     if(!PAD_USED) zxText(ctx, '(SHIFT)', tx/8, 77/8, Y, K);
 }
-// Phone: park the HTML pointer on top of the HAND BRAKE pedal.
-function demoPtrPlace(show){
-    const hb = $('tp-hb'), pad = $('tpad');
-    const on = show && hb && pad && pad.classList.contains('on');
-    demoPtr.classList.toggle('on', !!on);
-    if(!on) return;
-    const r = hb.getBoundingClientRect();
-    demoPtr.style.left = (r.left + r.width/2) + 'px';
-    demoPtr.style.top  = (r.top - 28) + 'px';   // leaves room for the arrow above the pedal
+
+// ── PLAY DEMO, and the controller rule on phones ───────────────────────────
+// Phones and tablets (primary pointer is a finger) have no on-screen driving
+// controls, so the demo needs a gamepad there. Browsers only reveal a pad once
+// one of its buttons is pressed, so the 'pad' page waits for that press.
+function siteNeedsPad(){ return !!(window.matchMedia && matchMedia('(pointer: coarse)').matches); }
+function sitePadConnected(){
+    return (navigator.getGamepads ? [...navigator.getGamepads()] : []).some(g=>g && g.connected);
 }
+function siteStartDemo(){
+    try { ZXLOAD.prime(); } catch(e){}            // unlock audio if this is a user gesture
+    if(EMBED_MAPS.essexforest) loadEmbeddedMap('essexforest');
+}
+function sitePadFound(){
+    if(!(SITE.open && SITE.page==='pad')) return;
+    PAD_USED = true;
+    siteClose();
+    siteStartDemo();
+}
+window.addEventListener('gamepadconnected', ()=>setTimeout(sitePadFound, 150));
 
 titleLoad();
 
