@@ -3481,6 +3481,7 @@ async function loadEmbeddedMap(key){
         ZXLOAD.start();                              // the tape stripes while it unpacks
         const snap = await embeddedSnapshot(key);
         loadSnapshot(snap);                          // stops the stripes and shows the game
+        demoSpawn();                                 // S34: start on a long, open, straight road
         modeShow(true);                              // S28: no road screen, straight to SELECT GAME MODE
     } catch(err){
         console.error('[embed] '+key+' failed:', err);
@@ -6174,6 +6175,47 @@ function demoInfoPaint(){
         const prompt = PAD_USED ? 'PRESS A' : (IS_TOUCH ? 'TAP TO START' : 'PRESS ANY KEY');
         zxCentre(sctx, prompt, 22, MD_BLACK, MD_YELLOW);
     }
+}
+
+// ── Demo spawn: a long, open, straight stretch of road ──────────────────────
+// The snapshot's saved car spot can sit by a dead end. Instead, search every
+// road for a point at least 80 wu (~130 m) from either end and clear of
+// junctions, with the next 150 wu (~250 m) ahead as straight as possible;
+// prefer longer roads. Park the car there facing along the road, and make it
+// the reset point too (Space / pad B). The camera is put straight behind.
+function demoSpawn(){
+    const AHEAD = 150, END_CLEAR = 80, JUNC_CLEAR = 10;
+    let best = null;
+    for(const road of RING.roads){
+        const r = road.ring; if(!r || r.length < 10) continue;
+        const cum = [0];
+        for(let i=1;i<r.length;i++) cum.push(cum[i-1] + Math.hypot(r[i].cx-r[i-1].cx, r[i].cz-r[i-1].cz));
+        const L = cum[cum.length-1];
+        if(L < AHEAD + 2*END_CLEAR) continue;
+        for(const dir of [1, -1]){                                   // try both ways along the road
+            for(let k=0;k<r.length;k+=2){
+                const i = dir > 0 ? k : r.length-1-k;
+                const from = dir > 0 ? cum[i] : L - cum[i];          // distance from the starting end
+                if(from < END_CLEAR || L - from < AHEAD + END_CLEAR) continue;
+                const p = r[i];
+                if(JUNC_ZONES.some(z => Math.hypot(z.x-p.cx, z.z-p.cz) < (z.r||0) + JUNC_CLEAR)) continue;
+                let j = i; while(j+dir >= 0 && j+dir < r.length && Math.abs(cum[j]-cum[i]) < AHEAD) j += dir;
+                const q = r[j], run = Math.abs(cum[j]-cum[i]);
+                const straight = Math.hypot(q.cx-p.cx, q.cz-p.cz) / (run || 1);
+                const score = (straight >= 0.98 ? 1000 : straight*900) + L*0.05;
+                if(!best || score > best.score) best = { score, x:p.cx, z:p.cz, yaw:Math.atan2(q.cx-p.cx, q.cz-p.cz)*180/Math.PI, name:road.name };
+            }
+        }
+    }
+    if(!best) return;
+    const yaw = (best.yaw + 360) % 360;
+    CAR.x = best.x; CAR.z = best.z; CAR.y = groundHeightAt(best.x, best.z);
+    CAR.yaw = yaw; CAR.velDir = yaw; CAR.speed = 0; CAR.modelYaw = 0;
+    CAR.startX = best.x; CAR.startZ = best.z; CAR.startYaw = yaw;
+    const yr = yaw*Math.PI/180;
+    CAM.x = CAR.x - Math.sin(yr)*CHASE.back; CAM.z = CAR.z - Math.cos(yr)*CHASE.back;
+    CAM.y = CAR.y + CHASE.height; CAM.yaw = yaw;
+    DEMO.spawnRoad = best.name;
 }
 
 titleLoad();
