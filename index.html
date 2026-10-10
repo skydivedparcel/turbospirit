@@ -479,8 +479,9 @@ const GFX_MODES = [
     { name:'MEDIUM', road:1000, scen:460, fade:340, power:2.90 },
     { name:'LOW',    road: 700, scen:360, fade:260, power:3.20 },
     { name:'FASTEST',road: 500, scen:280, fade:200, power:3.60 },
+    { name:'DEMO',   road: 320, scen:240, fade:180, power:3.60 },   // S34: the web demo — ~2.5x lighter than LOW, looks the same at play distance
 ];
-let GFX_LEVEL = 3;                     // S34: fixed at LOW for the demo (no option to change)
+let GFX_LEVEL = 5;                     // S34: fixed at DEMO for the web demo (no option to change)
 function applyGfx(){
     const g = GFX_MODES[GFX_LEVEL];
     CULL.ROAD_FAR     = g.road;
@@ -5894,7 +5895,7 @@ if(IS_TOUCH){
 //  In the demo drive: "EARLY DEMO - NOT FINAL GAME" and a TRY THE HANDBRAKE
 //  pointer until the player has tried a handbrake turn.
 // ════════════════════════════════════════════════════════════════════════
-applyGfx();                                        // graphics fixed at LOW (GFX_LEVEL 3), no option to change
+applyGfx();                                        // graphics fixed at the DEMO level (GFX_LEVEL 5), no option to change
 const RELEASE = Date.UTC(2026, 10, 19, 0, 0, 0);   // 19 Nov 2026, 00:00 UK time (GMT)
 function siteLeft(){
     const s = Math.max(0, Math.floor((RELEASE - Date.now())/1000));
