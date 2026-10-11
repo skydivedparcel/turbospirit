@@ -98,8 +98,8 @@ body { background: #000; min-height: 100vh; display: flex; flex-direction: colum
    Landscape: game fills the height, controls float over the corners. */
 body.touch { justify-content:flex-start; gap:0; -webkit-tap-highlight-color:transparent; }
 body.touch.driving { overflow:hidden; overscroll-behavior:none; touch-action:none; height:100vh; height:100dvh; }
-body.touch #title, body.touch #menu, body.touch #opts, body.touch #status { width:100vw; }
-body.touch #title-canvas, body.touch #city-canvas, body.touch #opts-canvas { width:100vw; height:75vw; }
+body.touch #title, body.touch #menu, body.touch #opts, body.touch #status, body.touch #steps { width:100vw; }
+body.touch #title-canvas, body.touch #city-canvas, body.touch #opts-canvas, body.touch #steps-canvas { width:100vw; height:75vw; }
 body.touch #game { width:100vw; gap:0; }
 body.touch #stage { flex-direction:column; align-items:center; gap:4px; }
 body.touch #c { width:100vw; height:75vw; }
@@ -109,7 +109,7 @@ body.touch #map {
     border:none; object-fit:contain;   /* keep the map's shape when it's squeezed */
 }
 @media (orientation: landscape){
-    body.touch #title-canvas, body.touch #city-canvas, body.touch #opts-canvas,
+    body.touch #title-canvas, body.touch #city-canvas, body.touch #opts-canvas, body.touch #steps-canvas,
     body.touch #c { width:auto; height:100vh; height:100dvh; }
     body.touch #map { display:none; }
 }
@@ -1017,7 +1017,7 @@ const CAR = {
     x: 0, z: 0,            // current position (set by loadMap)
     y: 0,                  // current ground height under the car (set each frame)
     yaw: 0,                // current heading (set by loadMap)
-    startX: 0, startZ: 0, startYaw: 0,   // start pose for Space-reset (set by loadMap)
+    startX: 0, startZ: 0, startYaw: 0,   // start pose for reset (R / pad B) (set by loadMap)
     speed: 0,              // metres per frame (signed: negative = reverse)
     steer: 0,              // current steering angle (deg), for visual lean
     modelYaw: 0,           // eased body-turn angle for the 3D car model (deg)
@@ -1029,6 +1029,11 @@ const CAR = {
     revHold: 0,            // S23: frames S has been held at a standstill (reverse delay)
     hbAmt: 0,              // S23: handbrake effect, eases 0 (off) … 1 (full) at HANDBRAKE SPEED
     steerSm: 0,            // S23: smoothed steering input (-1..1), eased by steerResponse
+    turbo: false,          // S35: turbo engaged this frame (X / Space held, going forwards)
+    offRoad: false,        // S36: off the tarmac and pavement this frame
+    wreck: null,           // S36: {type:'spin'|'fire', t, N, ...} while crashed (controls locked)
+    damage: 0,             // S36: 0..1 — full and the car goes up in flames
+    hitFlash: 0,           // S36: frames left of the damage gauge flashing after a hit
 };
 
 // Car driving parameters. Session 23: reverse + handbrake rework, tighter
@@ -1039,7 +1044,15 @@ const DRIVE_P = {
     accel:    0.20,        // throttle accel (wu/frame^2) — variable Outrun throttle
     brake:    0.30,        // brake decel, 1.5× accel: top speed → 0 in ~0.65 s (S23; was 0.34, then 0.10)
     drag:     0.985,       // rolling resistance when coasting (per frame)
-    maxFwd:   3.8,         // top forward speed (wu/frame) ≈ 283 mph
+    maxFwd:   1.676,       // S35: top speed 125 mph (was 3.8 ≈ 283 mph)
+    // ── Turbo (S35): hold X / Space AT TOP SPEED. Raises the top speed by turboAdd; the extra
+    // speed builds at turboAccel and bleeds off at turboFade once released.
+    turboAdd:   2.012,     // +150 mph → 275 mph with turbo
+    turboAccel: 0.22,      // wu/frame² above 125 mph (~0.45 s to full turbo)
+    turboFade:  0.45,      // wu/frame² back down to 125 mph on release (~0.2 s: cuts at once)
+    // ── Off road (S36): past the pavement edge the top speed drops to offRoadMax ──
+    offRoadMax:  0.537,    // 40 mph
+    offRoadSlow: 0.12,     // wu/frame² of braking down to it (125 → 40 mph in ~0.5 s)
     // ── Forward steering (S23: replaces laneCurve/laneTip/laneRecover) ──
     // The nose now genuinely turns: heading rotates at steerRate at full lock
     // (old model managed ~12°/s — the rest was sideways crab, which is why it
@@ -1048,6 +1061,10 @@ const DRIVE_P = {
     steerFullSpeed: 0.4,   // speed where full steerRate is reached (~30 mph);
                            // below it the turn rate scales down (constant radius)
     highSpeedSteer: 0.6,   // fraction of steerRate left at top speed (stability)
+    steerCap:       0.35,  // S35: plain steering only reaches this much lock — the
+                           // car stays on its first turn frame (≤14° body turn,
+                           // 1.4°/frame heading; keep < 0.375 or frame 2 shows).
+                           // The handbrake lifts the cap to full lock.
     steerResponse:  0.6,   // 0..1 how fast the wheel follows the key per frame
                            // (1 = instant; 0.6 ≈ 90% in 0.12 s)
     turnFullSpeed:  1.2,   // speed where the lane slide reaches full width
@@ -1102,7 +1119,7 @@ const CHASE = {
 // Keyboard and gamepad both write into this each frame, then updateCar reads it.
 // Either device works at any time (dev with WASD, play with a pad). steer is a
 // signed analogue value in [-1,1]; throttle/brakeRev are [0,1]; flags are bool.
-const INPUT = { steer:0, throttle:0, brakeRev:0, handbrake:false, reset:false };
+const INPUT = { steer:0, throttle:0, brakeRev:0, handbrake:false, reset:false, turbo:false };
 
 // Read an Xbox-style controller (standard mapping) and merge into INPUT. The pad
 // only ADDS to whatever the keyboard already set, so the two never fight: a held
@@ -1136,34 +1153,41 @@ function readGamepad(){
     const lt = gp.buttons[6] ? gp.buttons[6].value : 0;
     if(rt>0.05) INPUT.throttle = Math.max(INPUT.throttle, rt);
     if(lt>0.05) INPUT.brakeRev = Math.max(INPUT.brakeRev, lt);
-    // A button (0) = handbrake skid; Start (9) or B (1) = reset.
-    // Start (9) is reserved for the options screen, so reset is B (1) only.
-    // Both are remappable via Advanced > INPUTS (PAD_MAP).
+    // A (0) = handbrake, X (2) = turbo (S35), B (1) = reset.
+    // Start (9) is reserved for the options screen. All remappable via
+    // Advanced > INPUTS (PAD_MAP).
     const _hb = (typeof PAD_MAP!=='undefined') ? PAD_MAP.handbrake : 0;
     const _rs = (typeof PAD_MAP!=='undefined') ? PAD_MAP.reset     : 1;
+    const _tb = (typeof PAD_MAP!=='undefined') ? PAD_MAP.turbo     : 2;
     if(gp.buttons[_hb] && gp.buttons[_hb].pressed) INPUT.handbrake = true;
     if(gp.buttons[_rs] && gp.buttons[_rs].pressed) INPUT.reset = true;
+    if(gp.buttons[_tb] && gp.buttons[_tb].pressed) INPUT.turbo = true;
 }
 
 function updateCar(){
     // ── Gather input: keyboard first, then merge the gamepad on top ──
     INPUT.steer = 0; INPUT.throttle = 0; INPUT.brakeRev = 0;
-    INPUT.handbrake = false; INPUT.reset = false;
+    INPUT.handbrake = false; INPUT.reset = false; INPUT.turbo = false;
     if(keys['a']||keys['arrowleft'])  INPUT.steer -= 1;
     if(keys['d']||keys['arrowright']) INPUT.steer += 1;
     if(keys['w']||keys['arrowup'])    INPUT.throttle = 1;
     if(keys['s']||keys['arrowdown'])  INPUT.brakeRev = 1;
     if(keys['shift'])                 INPUT.handbrake = true;  // keyboard handbrake
-    if(keys[' '])                     INPUT.reset = true;
+    if(keys[' '])                     INPUT.turbo = true;      // S35: Space = turbo
+    if(keys['r'])                     INPUT.reset = true;      // S35: R = reset (was Space)
     readGamepad();
     ACCEL_SND.drove = true;   // S29: the acceleration sound only plays while the car is driven
 
-    // ── reset (Space / Start) — snap back to spawn, clear all motion ──
+    // ── reset (R / pad B) — snap back to spawn, clear all motion ──
     if(INPUT.reset){
         CAR.x=CAR.startX; CAR.z=CAR.startZ; CAR.yaw=CAR.startYaw;
-        CAR.speed=0; CAR.velDir=CAR.startYaw; CAR.revHold=0; CAR.hbAmt=0; CAR.steerSm=0;
+        CAR.speed=0; CAR.velDir=CAR.startYaw; CAR.revHold=0; CAR.hbAmt=0; CAR.steerSm=0; CAR.turbo=false;
+        CAR.wreck=null; CAR.modelYaw=0; CAR.damage=0;   // S36: reset = a fresh car at the start
         return;
     }
+
+    // S36: crashed (tree spin / building fire): the crash plays out, no control.
+    if(CAR.wreck){ updateWreck(); return; }
 
     const wrap180 = a => ((a % 360) + 540) % 360 - 180;   // signed angle diff
     const wrap360 = a => ((a % 360) + 360) % 360;
@@ -1172,36 +1196,59 @@ function updateCar(){
     // ── throttle / brake / reverse (S23) ──
     // S from forward = brake to a stop. S at a standstill must be held for
     // reverseDelay frames before reverse engages. W while reversing brakes first.
-    if(INPUT.throttle>0){
-        CAR.revHold = 0;
-        if(CAR.speed < 0) CAR.speed = Math.min(0, CAR.speed + DRIVE_P.brake * INPUT.throttle);
-        else              CAR.speed += DRIVE_P.accel * INPUT.throttle;
-    } else if(INPUT.brakeRev>0){
+    // S35: turbo only cuts in once you're at top speed (and not braking); then
+    // it's full throttle plus a higher cap. Drop below top speed and it cuts out.
+    const turbo = INPUT.turbo && CAR.speed >= DRIVE_P.maxFwd * 0.99 && !(INPUT.brakeRev > 0);
+    CAR.turbo = turbo;
+    if(turbo) INPUT.throttle = 1;
+    const prevSpeed = CAR.speed;
+    // S35: the brake wins when both pedals are held. Going forwards it brakes;
+    // stopped (or reversing) with both held, the car just holds still.
+    if(INPUT.brakeRev>0){
         if(CAR.speed > 0){
             CAR.speed = Math.max(0, CAR.speed - DRIVE_P.brake * INPUT.brakeRev);
             CAR.revHold = 0;
+        } else if(INPUT.throttle>0){
+            CAR.revHold = 0;
+            if(CAR.speed < 0) CAR.speed = Math.min(0, CAR.speed + DRIVE_P.brake * INPUT.brakeRev);
         } else if(CAR.speed < 0 || ++CAR.revHold > DRIVE_P.reverseDelay){
             CAR.speed -= DRIVE_P.revAccel * INPUT.brakeRev;
         }
+    } else if(INPUT.throttle>0){
+        CAR.revHold = 0;
+        if(CAR.speed < 0) CAR.speed = Math.min(0, CAR.speed + DRIVE_P.brake * INPUT.throttle);
+        else              CAR.speed += DRIVE_P.accel * INPUT.throttle;
     } else {
         CAR.revHold = 0;
         CAR.speed *= DRIVE_P.drag;            // coast to a stop
         if(Math.abs(CAR.speed) < 0.005) CAR.speed = 0;
     }
-    CAR.speed = Math.max(DRIVE_P.maxRev, Math.min(DRIVE_P.maxFwd, CAR.speed));
-
-    // ── off-road stickiness: the further from any road, the more grip you lose ──
-    // On the tarmac (within OFFROAD_FREE) there's no penalty. Past that, an extra
-    // per-frame drag scales up with distance toward the respawn limit, bleeding
-    // speed — so cutting across fields or ploughing through gardens is slow and
-    // punishing, and you're rewarded for keeping it on the road.
+    // S35: above 125 mph the speed only climbs at turboAccel while turbo is held,
+    // and bleeds back down at turboFade (or faster under the brake) without it.
     {
-        const d = Math.sqrt(distToRoad2(CAR.x, CAR.z));
-        if(d > OFFROAD_FREE){
-            const f = Math.min(1, (d - OFFROAD_FREE) / (OFFROAD_LIMIT - OFFROAD_FREE));
-            CAR.speed *= 1 - OFFROAD_MAX_DRAG * f;   // up to OFFROAD_MAX_DRAG at the edge
+        const base = DRIVE_P.maxFwd, top = base + DRIVE_P.turboAdd;
+        if(CAR.speed > base){
+            CAR.speed = turbo
+                ? Math.min(top, Math.max(prevSpeed, base) + DRIVE_P.turboAccel)
+                : Math.max(base, Math.min(CAR.speed, prevSpeed - DRIVE_P.turboFade));
         }
+        CAR.speed = Math.max(DRIVE_P.maxRev, Math.min(top, CAR.speed));
     }
+
+    // ── off road (S36): past the pavement edge the car tops out at 40 mph ──
+    // (it brakes down to that quickly rather than stopping dead). Turbo can't
+    // happen out here: it needs top speed.
+    // Tested where the car SPRITE is on the ground, not at the physics point.
+    {
+        const F = carFoot(), r = CAR.yaw*Math.PI/180, mid = (F.f0 + F.f1)/2;
+        CAR.offRoad = isOffRoad(CAR.x + Math.sin(r)*mid, CAR.z + Math.cos(r)*mid);
+    }
+    // (measured from last frame's speed, so the accelerator can't hold it up)
+    if(CAR.offRoad && CAR.speed > DRIVE_P.offRoadMax)
+        CAR.speed = Math.max(DRIVE_P.offRoadMax, Math.min(CAR.speed, prevSpeed - DRIVE_P.offRoadSlow));
+    // ...and it slowly knocks the car about (a full gauge takes ~30 s at 40 mph)
+    if(CAR.offRoad) addDamage(DAMAGE.offRoadPerFrame * Math.min(1, Math.abs(CAR.speed) / DRIVE_P.offRoadMax), false);
+    if(CAR.wreck) return;
 
     // ── STEERING (S23) ───────────────────────────────────────────────────────
     // Forward = grip steering: the nose turns at steerRate (owner: "perfect").
@@ -1220,7 +1267,12 @@ function updateCar(){
     const resp = baseResp + (1 - baseResp) * CAR.hbAmt;       // handbrake = sharper wheel
     CAR.steerSm += (sRaw - CAR.steerSm) * resp;               // wheel follows the key
     if(Math.abs(CAR.steerSm) < 0.001) CAR.steerSm = 0;
-    const s = CAR.steerSm;
+    // S35: plain steering is capped at steerCap (the car's first turn frame);
+    // the handbrake lifts the cap to full lock as it eases in, then multiplies
+    // as before. Reverse keeps the full (uncapped) lock.
+    const lock = DRIVE_P.steerCap + (1 - DRIVE_P.steerCap) * CAR.hbAmt;
+    const sRev = CAR.steerSm;
+    const s = CAR.steerSm * lock;
     CAR.steer = sRaw * 24;                    // visual steer angle (cosmetic) — dash faces
     const spd = Math.abs(CAR.speed);
     const speedFac = Math.min(1, spd / DRIVE_P.turnFullSpeed);
@@ -1232,9 +1284,9 @@ function updateCar(){
         // ── REVERSE: like a real car. Right lock swings the nose LEFT; turn rate
         // scales with speed (constant radius), no sideways crab.
         const revFac = Math.min(1, spd / Math.abs(DRIVE_P.maxRev));
-        CAR.yaw = wrap360(CAR.yaw - s * DRIVE_P.revTurn * revFac * hbMul);   // handbrake applies here too
+        CAR.yaw = wrap360(CAR.yaw - sRev * DRIVE_P.revTurn * revFac * hbMul);   // handbrake applies here too
         CAR.velDir = CAR.yaw;
-        modelTarget = -s * 25 * revFac * (1 + 0.5 * (hbMul - 1));   // body swings the way the nose goes
+        modelTarget = -sRev * 25 * revFac * (1 + 0.5 * (hbMul - 1));   // body swings the way the nose goes
         modelTarget = Math.max(-80, Math.min(80, modelTarget));
         modelEase = 0.2;
     } else {
@@ -1252,7 +1304,7 @@ function updateCar(){
         // body lean fades in with speed (~22 mph); leans harder on the handbrake
         const leanFac = Math.min(1, spd / 0.3);
         modelTarget = s * 40 * leanFac * (1 + 0.5 * (hbMul - 1));
-        modelTarget = Math.max(-80, Math.min(80, modelTarget));
+        modelTarget = Math.max(-70, Math.min(70, modelTarget));   // S35: was ±80 — last turn frame dropped
         modelEase = 0.3;
     }
     CAR.modelYaw += (modelTarget - CAR.modelYaw) * modelEase;
@@ -1262,18 +1314,398 @@ function updateCar(){
     const vR = CAR.velDir * Math.PI/180;
     const fwdX = Math.sin(vR), fwdZ = Math.cos(vR);
     const rgtX = Math.cos(vR), rgtZ = -Math.sin(vR);   // perpendicular (right)
-    CAR.x += fwdX * CAR.speed + rgtX * lateral;
-    CAR.z += fwdZ * CAR.speed + rgtZ * lateral;
+    // S36: move in steps of at most 0.4 wu so nothing thin is tunnelled through
+    // at speed, testing the car's outline against trees and buildings each step.
+    {
+        const mx = fwdX * CAR.speed + rgtX * lateral, mz = fwdZ * CAR.speed + rgtZ * lateral;
+        const len = Math.hypot(mx, mz);
+        if(len > 0){
+            const F = carFoot(), r = CAR.yaw*Math.PI/180, mid = (F.f0 + F.f1)/2;
+            const cand = collideCandidates(CAR.x + Math.sin(r)*mid, CAR.z + Math.cos(r)*mid, len + 4);
+            const n = Math.max(1, Math.ceil(len / 0.4));
+            for(let i = 0; i < n; i++){
+                const nx = CAR.x + mx/n, nz = CAR.z + mz/n;
+                const pNew = carPen(nx, nz, CAR.yaw, F, cand);
+                if(pNew > 0 && pNew > carPen(CAR.x, CAR.z, CAR.yaw, F, cand) + 1e-6){   // going deeper in: a hit
+                    onHit(carHits(nx, nz, CAR.yaw, F, cand) || { type:'building' }, mx/len, mz/len); break;
+                }
+                CAR.x = nx; CAR.z = nz;
+            }
+        }
+    }
 
     // ── run off the end of the road? respawn at a fresh point ──
     checkOffRoadRespawn();
 }
 
+// ─── Collisions (S36) ────────────────────────────────────────────────────────
+// Off road: distance from the nearest road CENTRELINE SEGMENT (not just the
+// nearest vertex, which reads long straight roads as grass between their far-
+// apart points). Segments are bucketed in a 16 wu grid, rebuilt when RING
+// changes. Inside a junction disc counts as road.
+const ROAD_EDGE = 8.5 + 0.5;            // ROAD_HW 6 + PAVE_W 2.5, plus a little give
+const RSEG = { ring:null, grid:null, cell:16 };
+function roadSegGrid(){
+    if(RSEG.ring === RING && RSEG.grid) return RSEG.grid;
+    const g = new Map(), C = RSEG.cell, pad = ROAD_EDGE + 1;
+    for(const road of RING.roads){
+        const r = road.ring; if(!r) continue;
+        for(let i = 0; i + 1 < r.length; i++){
+            const a = r[i], b = r[i+1], seg = [a.cx, a.cz, b.cx, b.cz];
+            const x0 = Math.floor((Math.min(a.cx, b.cx) - pad)/C), x1 = Math.floor((Math.max(a.cx, b.cx) + pad)/C);
+            const z0 = Math.floor((Math.min(a.cz, b.cz) - pad)/C), z1 = Math.floor((Math.max(a.cz, b.cz) + pad)/C);
+            for(let gx = x0; gx <= x1; gx++) for(let gz = z0; gz <= z1; gz++){
+                const k = gx + ',' + gz; let L = g.get(k); if(!L){ L = []; g.set(k, L); } L.push(seg);
+            }
+        }
+    }
+    RSEG.ring = RING; RSEG.grid = g;
+    return g;
+}
+function isOffRoad(x, z){
+    if(!RING.roads.length) return false;
+    for(const j of JUNC_ZONES){ const dx = x - j.x, dz = z - j.z; if(dx*dx + dz*dz < (j.r||0)*(j.r||0)) return false; }
+    const L = roadSegGrid().get(Math.floor(x/RSEG.cell) + ',' + Math.floor(z/RSEG.cell));
+    if(!L) return true;
+    const E2 = ROAD_EDGE * ROAD_EDGE;
+    for(const s of L){
+        const vx = s[2]-s[0], vz = s[3]-s[1], wx = x-s[0], wz = z-s[1];
+        const vv = vx*vx + vz*vz, t = vv ? Math.max(0, Math.min(1, (wx*vx + wz*vz)/vv)) : 0;
+        const dx = wx - vx*t, dz = wz - vz*t;
+        if(dx*dx + dz*dz <= E2) return false;
+    }
+    return true;
+}
+
+// Where the car really is on screen. The sprite is pasted at a fixed spot, and
+// the ground it covers runs from CAR_FOOT.near to .far in front of the CAMERA
+// (worked out from the projection: sprite bottom row y94, top y78, 26 px wide).
+// The physics point CAR.x/z is ~13-14 wu ahead of the camera, so the visible car
+// sits 6-9 wu BEHIND it. carFoot() gives that span as distances along the car's
+// heading from CAR.x/z (negative = behind), using this frame's camera gap.
+const CAR_FOOT = { near:4.5, far:7.2, halfW:1.35, treeR:0.45 };
+function carFoot(){
+    // S36b: use the camera's RESTING distance, not the live one. At speed the
+    // camera trails further back, then closes up after a stop — with the live
+    // gap the sprite crept ~1.5 wu forward into the wall after every hit and the
+    // car was stuck. This way the car stops where its sprite settles.
+    const gap = CHASE.back;
+    return { f0: CAR_FOOT.near - gap, f1: CAR_FOOT.far - gap, hw: CAR_FOOT.halfW };
+}
+// Trees (not hedges) and buildings near the move, gathered once per frame.
+// Hidden scenery (B key) doesn't collide.
+function collideCandidates(x, z, reach){
+    const out = { trees:[], blds:[] };
+    if(!SHOW_BUILDINGS) return out;
+    for(const i of bucketsNear(PROP_BUCKETS, x, z, reach)){
+        const p = PROPS[i];
+        if(p[0] === 'hedgeline') continue;
+        if(SNM.active && SNM.hideProps && SNM.hideProps.has(i)) continue;
+        const dx = p[1]-x, dz = p[2]-z;
+        if(dx*dx + dz*dz < (reach + 2)*(reach + 2)) out.trees.push(p);
+    }
+    for(const i of bucketsNear(BUILDING_BUCKETS, x, z, reach + 30)){
+        const B = BUILDINGS[i];
+        const HW = (B.length>6) ? B[6] : 5.0, DEP = (B.length>7) ? B[7] : 3.5, R = Math.hypot(HW, DEP) + reach + 2;
+        const dx = B[0]-x, dz = B[1]-z;
+        if(dx*dx + dz*dz < R*R) out.blds.push(B);
+    }
+    return out;
+}
+// Hit test of the visible car's outline (front corners + centre, mid sides,
+// rear corners) at physics position (x,z): returns the first thing it touches.
+function carHits(x, z, yaw, F, cand){
+    if(!cand.trees.length && !cand.blds.length) return null;
+    const r = yaw*Math.PI/180, fx = Math.sin(r), fz = Math.cos(r), rx = Math.cos(r), rz = -Math.sin(r);
+    const a = F.f0, b = F.f1, m = (a + b)/2, Wd = F.hw;
+    const pts = [[b, 0], [b, Wd], [b, -Wd], [m, Wd], [m, -Wd], [a, Wd], [a, -Wd], [a, 0]]
+        .map(([f, s])=>[x + fx*f + rx*s, z + fz*f + rz*s]);
+    const TR2 = CAR_FOOT.treeR * CAR_FOOT.treeR;
+    for(const p of cand.trees)
+        for(const q of pts){ const dx = q[0]-p[1], dz = q[1]-p[2]; if(dx*dx + dz*dz < TR2) return { type:'tree', x:p[1], z:p[2] }; }
+    // a tree trunk is thinner than the car: also catch one passing between the
+    // outline points (front edge and both sides as line segments)
+    const segHit = (p, q, tx, tz)=>{ const vx=q[0]-p[0], vz=q[1]-p[1], wx=tx-p[0], wz=tz-p[1];
+        const vv=vx*vx+vz*vz, t=vv?Math.max(0,Math.min(1,(wx*vx+wz*vz)/vv)):0, dx=wx-vx*t, dz=wz-vz*t; return dx*dx+dz*dz < TR2; };
+    const edges = [[pts[1], pts[2]], [pts[1], pts[5]], [pts[2], pts[6]], [pts[5], pts[6]]];
+    for(const p of cand.trees) for(const [e0, e1] of edges) if(segHit(e0, e1, p[1], p[2])) return { type:'tree', x:p[1], z:p[2] };
+    for(const B of cand.blds){                    // point in oriented box (snmBlocked maths)
+        const by = B[2]*Math.PI/180, cy = Math.cos(by), sy = Math.sin(by);
+        const HW = (B.length>6) ? B[6] : 5.0, DEP = (B.length>7) ? B[7] : 3.5;
+        for(const q of pts){
+            const dx = q[0]-B[0], dz = q[1]-B[1], u = dx*cy - dz*sy, v = dx*sy + dz*cy;
+            if(Math.abs(u) < HW && Math.abs(v) < DEP) return { type:'building' };
+        }
+    }
+    return null;
+}
+
+// How far the car outline is INSIDE things (0 = clear): summed depth of the
+// outline points inside buildings, and how far trunks are inside the outline.
+// Used so a car that's already touching something can always move to get less
+// stuck (reverse out, steer away, slide along) — only going deeper is a hit.
+function carPen(x, z, yaw, F, cand){
+    if(!cand.trees.length && !cand.blds.length) return 0;
+    const r = yaw*Math.PI/180, fx = Math.sin(r), fz = Math.cos(r), rx = Math.cos(r), rz = -Math.sin(r);
+    const a = F.f0, b = F.f1, m = (a + b)/2, Wd = F.hw;
+    const pts = [[b, 0], [b, Wd], [b, -Wd], [m, Wd], [m, -Wd], [a, Wd], [a, -Wd], [a, 0]]
+        .map(([f, s])=>[x + fx*f + rx*s, z + fz*f + rz*s]);
+    let pen = 0;
+    const R0 = CAR_FOOT.treeR;
+    const segD = (p, q, tx, tz)=>{ const vx=q[0]-p[0], vz=q[1]-p[1], wx=tx-p[0], wz=tz-p[1];
+        const vv=vx*vx+vz*vz, t=vv?Math.max(0,Math.min(1,(wx*vx+wz*vz)/vv)):0; return Math.hypot(wx-vx*t, wz-vz*t); };
+    const edges = [[pts[1], pts[2]], [pts[1], pts[5]], [pts[2], pts[6]], [pts[5], pts[6]]];
+    for(const p of cand.trees){
+        let d = Infinity;
+        for(const q of pts) d = Math.min(d, Math.hypot(q[0]-p[1], q[1]-p[2]));
+        for(const [e0, e1] of edges) d = Math.min(d, segD(e0, e1, p[1], p[2]));
+        // trunk inside the outline counts as fully in
+        const lx = (p[1]-x)*fx + (p[2]-z)*fz, ls = (p[1]-x)*rx + (p[2]-z)*rz;
+        if(lx > a && lx < b && Math.abs(ls) < Wd) d = 0;
+        if(d < R0) pen += R0 - d + (d === 0 ? Math.min(lx - a, b - lx, Wd - Math.abs(ls)) : 0);
+    }
+    for(const B of cand.blds){
+        const by = B[2]*Math.PI/180, cy = Math.cos(by), sy = Math.sin(by);
+        const HW = (B.length>6) ? B[6] : 5.0, DEP = (B.length>7) ? B[7] : 3.5;
+        for(const q of pts){
+            const dx = q[0]-B[0], dz = q[1]-B[1], u = dx*cy - dz*sy, v = dx*sy + dz*cy;
+            if(Math.abs(u) < HW && Math.abs(v) < DEP) pen += Math.min(HW - Math.abs(u), DEP - Math.abs(v));
+        }
+    }
+    return pen;
+}
+
+// Damage (S36). Hits add damage by how fast you were going; off road adds a
+// trickle. Hitting a building or tree knocks the car back the way it came: it
+// rebounds (harder the faster you hit), slides to a stop with a wobble, and you
+// get control back. A tree also spins it once as it bounces, ending turned a
+// little away from the tree. Full damage = flames for 4 s, then a fresh car at
+// the start.
+const DAMAGE = {
+    building: [0.06, 0.16],     // damage = a + b × (speed / top speed): 125 mph ≈ 0.22 — four hits are OK, the fifth burns
+    tree:     [0.10, 0.35],     // 125 mph ≈ 0.45
+    offRoadPerFrame: 0.0017,    // at 40 mph: ~3.4% a second
+    spinMin: 0.15,              // below ~11 mph a tree just bounces you, no spin
+    rebound: [0.12, 0.45],      // bounce-back speed = a + b × (speed / top speed), wu/frame
+    reboundDecay: 0.82,         // per frame: 125 mph → ~3 wu of slide over ~0.5 s
+    wobble: 14,                 // degrees of body wobble on a bounce, dying away
+};
+const WRECK = { bounceFrames:12, spinFrames:20, spinTurns:1, spinAway:35, fireFrames:80 };
+function addDamage(d, flash){
+    if(CAR.wreck && CAR.wreck.type === 'fire') return;
+    CAR.damage = Math.min(1, CAR.damage + d);
+    if(flash) CAR.hitFlash = 10;
+    if(CAR.damage >= 1){                          // wrecked: up in flames
+        CAR.speed = 0; CAR.turbo = false; CAR.hbAmt = 0; CAR.steerSm = 0;
+        CAR.wreck = { type:'fire', t:0, N:WRECK.fireFrames };
+    }
+}
+function onHit(hit, dx, dz){
+    const spd = Math.abs(CAR.speed), f = Math.min(1, spd / DRIVE_P.maxFwd);
+    const k = DAMAGE[hit.type === 'tree' ? 'tree' : 'building'];
+    const dir = CAR.speed >= 0 ? -1 : 1;          // knocked back the opposite way to travel
+    CAR.speed = 0; CAR.turbo = false; CAR.hbAmt = 0; CAR.steerSm = 0;
+    addDamage(k[0] + k[1] * f, true);
+    if(CAR.wreck) return;                         // that one finished it: fire
+    const v = dir * (DAMAGE.rebound[0] + DAMAGE.rebound[1] * f);
+    if(hit.type === 'tree' && spd > DAMAGE.spinMin){
+        const r = CAR.yaw*Math.PI/180;
+        const side = Math.cos(r)*(hit.x - CAR.x) - Math.sin(r)*(hit.z - CAR.z);   // >0: tree on the right
+        const away = (side > 0.05 ? -1 : side < -0.05 ? 1 : (tfxRnd() < 0.5 ? -1 : 1));
+        CAR.wreck = { type:'spin', t:0, N:WRECK.spinFrames, v, dir:away, off:away*WRECK.spinAway };
+    } else {
+        CAR.wreck = { type:'bounce', t:0, N:WRECK.bounceFrames, v, wob:(tfxRnd() < 0.5 ? -1 : 1) * DAMAGE.wobble * (0.5 + 0.5*f) };
+    }
+}
+
+// Slide the car along its line of travel by v (negative = backwards) in small
+// steps; stop short of anything solid (no extra damage for the slide).
+function slideCar(v){
+    if(!v) return 0;
+    const r = CAR.velDir*Math.PI/180, F = carFoot(), mid = (F.f0 + F.f1)/2;
+    const mx = Math.sin(r)*v, mz = Math.cos(r)*v, len = Math.abs(v);
+    const cand = collideCandidates(CAR.x + Math.sin(r)*mid, CAR.z + Math.cos(r)*mid, len + 4);
+    const n = Math.max(1, Math.ceil(len / 0.4));
+    for(let i = 0; i < n; i++){
+        const nx = CAR.x + mx/n, nz = CAR.z + mz/n;
+        const pNew = carPen(nx, nz, CAR.yaw, F, cand);
+        if(pNew > 0 && pNew > carPen(CAR.x, CAR.z, CAR.yaw, F, cand) + 1e-6) return 0;   // into something else: stop
+        CAR.x = nx; CAR.z = nz;
+    }
+    return v;
+}
+function updateWreck(){
+    const Wk = CAR.wreck; Wk.t++;
+    CAR.speed = 0;
+    if(Wk.type === 'bounce' || Wk.type === 'spin'){
+        Wk.v = slideCar(Wk.v) * DAMAGE.reboundDecay;   // rebound slide, dying away
+        if(Math.abs(Wk.v) < 0.01) Wk.v = 0;
+    }
+    if(Wk.type === 'bounce'){
+        // the body rocks from the knock and settles
+        const k = 1 - Wk.t / Wk.N;
+        CAR.modelYaw = Wk.wob * Math.sin(Wk.t * 1.6) * k * k;
+        if(Wk.t >= Wk.N){ CAR.modelYaw = 0; CAR.wreck = null; }
+    } else if(Wk.type === 'spin'){
+        // spin speed falls off linearly so the turns add up to spinTurns × 360°
+        const r0 = 2 * 360 * WRECK.spinTurns / Wk.N;
+        CAR.modelYaw += Wk.dir * r0 * Math.max(0, 1 - (Wk.t - 0.5)/Wk.N);
+        if(Wk.t >= Wk.N){
+            // finish turned away from the tree; the body angle makes up the
+            // difference so the sprite doesn't jump while the camera swings round
+            CAR.yaw = (CAR.yaw + Wk.off + 360) % 360; CAR.velDir = CAR.yaw;
+            CAR.modelYaw = -Wk.off;
+            CAR.wreck = null;
+        }
+    } else if(Wk.t >= Wk.N){                       // burnt out: a fresh car at the start
+        CAR.wreck = null; CAR.damage = 0;
+        CAR.x = CAR.startX; CAR.z = CAR.startZ; CAR.yaw = CAR.startYaw; CAR.velDir = CAR.startYaw;
+        CAR.modelYaw = 0; CAR.revHold = 0;
+        CAR.y = groundHeightAt(CAR.x, CAR.z);
+        const yr = CAR.yaw*Math.PI/180;
+        CAM.x = CAR.x - Math.sin(yr)*CHASE.back; CAM.z = CAR.z - Math.cos(yr)*CHASE.back;
+        CAM.y = CAR.y + CHASE.height; CAM.yaw = CAR.yaw;
+    }
+}
+
+// Damage meter, across the top of the dash map: ten segments that fill left to
+// right, coloured by position — four green, three yellow, three red. Unlit
+// ones are dark. After a hit the lit segments flash white; above 80% the last
+// one blinks. It's drawn only on the map panel's own pixels, so it stays
+// behind the steering wheel exactly like the map does.
+const DMG_METER = { n:10, segW:4, gap:1, rows:3,
+                    cols:[[0,251,0],[0,251,0],[0,251,0],[0,251,0],[255,251,0],[255,251,0],[255,251,0],[255,0,0],[255,0,0],[255,0,0]] };
+function drawDamage(){
+    const M = DMG_METER, x0 = MAPWIN.x + Math.floor((MAPWIN.w - (M.n*M.segW + (M.n-1)*M.gap))/2), y0 = MAPWIN.y;
+    const put = (x, y, c)=>{ if(!_dmIsPanel(x, y)) return; const i = (y*W + x)*4; D[i]=c[0]; D[i+1]=c[1]; D[i+2]=c[2]; D[i+3]=255; };
+    const flash = CAR.hitFlash > 0 && (CAR.hitFlash & 2);
+    if(CAR.hitFlash > 0) CAR.hitFlash--;
+    for(let y = y0; y < y0 + M.rows + 2; y++) for(let x = MAPWIN.x; x < MAPWIN.x + MAPWIN.w; x++) put(x, y, [0,0,0]);   // black strip
+    const lit = Math.ceil(CAR.damage * M.n - 1e-6), blink = CAR.damage > 0.8 && ((performance.now()/200)|0) % 2;
+    for(let i = 0; i < M.n; i++){
+        const on = i < lit && !(blink && i === lit - 1);
+        const c = !on ? [40,40,40] : flash ? [255,255,255] : M.cols[i];
+        const sx = x0 + i*(M.segW + M.gap);
+        for(let y = y0 + 1; y <= y0 + M.rows; y++) for(let x = sx; x < sx + M.segW; x++) put(x, y, c);
+    }
+}
+
+// ── Car effects (S35 turbo, S36 dirt + fire) ────────────────────────────────
+// Black 2×2 and 1×1 pixels written straight into the 256×192 frame, like a
+// Spectrum would. Three kinds, all from the car sprite:
+//   turbo: wheel-spin grit flung out sideways from the rear wheels, falling
+//          back to the road around the base of the car.
+//   dirt:  off road — lower and shorter: it scuffs along the ground under the
+//          car and barely leaves the bottom of the sprite.
+//   fire:  crashed into a building — flames licking up off the car body,
+//          flickering side to side, shrinking as they rise.
+const TFX = { amt:0, parts:[], wheels:{}, seed:12345, acc:0, dacc:0 };
+const TFX_MAX = 45, TFX_FIRE_MAX = 170;
+function tfxRnd(){ TFX.seed = (TFX.seed * 16807) % 2147483647; return TFX.seed / 2147483647; }
+// Rear-wheel contact points and height of a turn frame (screen px), cached.
+function tfxWheels(idx){
+    if(TFX.wheels[idx]) return TFX.wheels[idx];
+    const f = CAR_TURN[idx];
+    const x0 = Math.round(Math.round(VIEW_X1 * 0.5) + f.ox);
+    let bottom = -1, top = -1, l = 1e9, r = -1e9;
+    for(let y = f.h - 1; y >= 0 && bottom < 0; y--)
+        for(let x = 0; x < f.w; x++) if(f.px[y*f.w + x]){ bottom = y; break; }
+    for(let y = 0; y < f.h && top < 0; y++)
+        for(let x = 0; x < f.w; x++) if(f.px[y*f.w + x]){ top = y; break; }
+    for(let y = Math.max(0, bottom - 3); y <= bottom; y++)
+        for(let x = 0; x < f.w; x++) if(f.px[y*f.w + x]){ l = Math.min(l, x); r = Math.max(r, x); }
+    return (TFX.wheels[idx] = { l:x0 + l, r:x0 + r, oy:f.oy + bottom, h:bottom - top + 1 });
+}
+function turboFx(){
+    const base = DRIVE_P.maxFwd;
+    const bySpeed = Math.max(0, Math.min(1, (CAR.speed - base) / DRIVE_P.turboAdd));
+    const P = TFX.parts;
+    if(CAR.turbo) TFX.amt += (Math.max(bySpeed, 0.5) - TFX.amt) * 0.4;
+    else if(TFX.amt){                              // turbo off: the grit cuts at once
+        TFX.amt = 0;
+        for(let i = P.length - 1; i >= 0; i--) if(P[i].kind === 'turbo') P.splice(i, 1);
+    }
+    const fire = !!(CAR.wreck && CAR.wreck.type === 'fire');
+    const dirt = CAR.offRoad && !CAR.wreck && Math.abs(CAR.speed) > 0.03;
+    if(TFX.amt < 0.05 && !fire && !dirt && !P.length) return;
+    const X1 = VIEW_X1, Y1 = DASHBOARD_Y - 1;
+    let a = -CAR.modelYaw; a = ((a % 360) + 360) % 360;
+    const w = tfxWheels(Math.round(a/10) % 36);
+    const gy = Math.min(Y1, Math.round(DASHBOARD_Y - 4 + CARV.dy + w.oy));   // road line under the wheels
+    const turboN = ()=>P.reduce((n, p)=>n + (p.kind === 'turbo'), 0);
+    // turbo grit from both rear wheels
+    if(TFX.amt >= 0.05 && !CAR.crash.active && !CAR.wreck){
+        TFX.acc += 0.5 + 1.5 * TFX.amt;                                           // per wheel, per frame (fractional)
+        const n = Math.floor(TFX.acc); TFX.acc -= n;
+        let have = turboN();
+        for(const side of [-1, 1]) for(let k = 0; k < n && have < TFX_MAX; k++, have++){
+            P.push({ kind:'turbo',
+                x: (side < 0 ? w.l : w.r) - side * (1 + tfxRnd()*3),   // just inside the wheel: out from under
+                y: gy - tfxRnd()*2,
+                vx: side * (0.6 + tfxRnd()*2.4) * (0.6 + 0.4*TFX.amt),
+                vy: -(0.4 + tfxRnd()*1.6) * (0.6 + 0.4*TFX.amt),
+                g:  0.35 + tfxRnd()*0.2, drag: 0.88,
+                life: 5 + (tfxRnd()*8 | 0), age: 0, big: tfxRnd() < 0.55, floor: gy,
+            });
+        }
+    }
+    // off-road dirt: low and short, hugging the bottom of the car
+    if(dirt){
+        const f = Math.min(1, Math.abs(CAR.speed) / DRIVE_P.offRoadMax);
+        TFX.dacc += 1.0 + 1.6 * f;
+        const n = Math.floor(TFX.dacc); TFX.dacc -= n;
+        for(const side of [-1, 1]) for(let k = 0; k < n && P.length < TFX_FIRE_MAX; k++){
+            P.push({ kind:'dirt',
+                x: (side < 0 ? w.l : w.r) + side * tfxRnd()*2,         // off the outside of the tyre
+                y: gy - tfxRnd()*2,
+                vx: side * (0.7 + tfxRnd()*1.8) * (0.5 + 0.5*f),
+                vy: -(0.3 + tfxRnd()*0.9) * (0.5 + 0.5*f),          // low: a few px at most
+                g:  0.25, drag: 0.85,
+                life: 4 + (tfxRnd()*6 | 0), age: 0, big: tfxRnd() < 0.65, floor: gy,
+            });
+        }
+    }
+    // fire: flames rise off the car body. A big flare-up first, then a steady
+    // burn, dying down over the last second.
+    if(fire){
+        const t = CAR.wreck.t, N = CAR.wreck.N;
+        const heat = t < 8 ? 1.6 : t > N - 20 ? Math.max(0.2, (N - t)/20) : 1;
+        const n = Math.round((7 + tfxRnd()*4) * heat);
+        const top = gy - w.h;                                     // top of the car sprite
+        for(let k = 0; k < n && P.length < TFX_FIRE_MAX; k++){
+            const u = (tfxRnd() + tfxRnd()) / 2;                  // bunched to the middle: taller centre
+            P.push({ kind:'fire',
+                x: w.l + 2 + u * (w.r - w.l - 4),
+                y: top + 2 + tfxRnd() * w.h * 0.6,
+                vx: (tfxRnd() - 0.5) * 0.5,
+                vy: -(1.2 + tfxRnd()*2.0) * (0.7 + 0.3*heat) * (1.3 - Math.abs(u - 0.5)),
+                g: -0.05, drag: 0.9, ph: tfxRnd()*6.3,
+                life: 6 + (tfxRnd()*10 | 0), age: 0, big: tfxRnd() < 0.75, floor: 1e9,
+            });
+        }
+    }
+    const blk = (x, y)=>{
+        if(x < 0 || x > X1 || y < 0 || y > Y1) return;
+        const i = (y*W + x) * 4; D[i] = D[i+1] = D[i+2] = 0; D[i+3] = 255;
+    };
+    for(let i = P.length - 1; i >= 0; i--){
+        const p = P[i];
+        if(p.kind === 'fire') p.x += Math.sin(p.ph + p.age*1.3) * 0.7;   // flicker side to side
+        p.x += p.vx; p.y += p.vy; p.vy += p.g; p.vx *= p.drag;
+        if(p.y > p.floor){ p.y = p.floor; p.vy *= -0.3; p.vx *= 0.6; }   // skitter along the road
+        if(++p.age > p.life){ P.splice(i, 1); continue; }
+        const x = Math.round(p.x), y = Math.round(p.y);
+        blk(x, y);
+        if(p.big && p.age < p.life * 0.6){ blk(x+1, y); blk(x, y-1); blk(x+1, y-1); }   // 2×2 early on
+        if(p.kind === 'fire' && p.age < p.life * 0.5){ blk(x, y+1); blk(x, y+2); }   // fresh flames are tongues
+    }
+}
+
 // Respawn when the car has driven OFF THE END of the road network — i.e. it's
 // farther than OFFROAD_LIMIT from any road centreline. Brief off-road excursions
-// (cutting a corner, sliding onto the verge) are fine and only incur the
-// stickiness penalty; this only triggers once you've genuinely left the drivable
-// roads behind. Teleports to the respawn candidate farthest from where you left,
+// (cutting a corner, sliding onto the verge) are fine and only cost the 40 mph
+// cap; this only triggers once you've genuinely left the drivable roads
+// behind. Teleports to the respawn candidate farthest from where you left,
 // facing the map centre, motion cleared, camera snapped in. No-op until loaded.
 function checkOffRoadRespawn(){
     if(!RESPAWN_PTS.length || !ROAD_PTS.length) return;
@@ -2967,13 +3399,14 @@ function render(){
     setClip(0, HORIZON_Y, VIEW_X1, DASHBOARD_Y-1);
     updateCarCrash();
     if(!(SNM.active && SNM.onFoot)) drawCar();   // on foot, the car is a world sprite instead
+    if(!(SNM.active && SNM.onFoot)) turboFx();   // S35: turbo wheel-spin grit around the car
     resetClip();
 
     if(FULL){                     // re-black the border: some sprites ignore the clip
         const F=FULL_WIN;
         for(let y=0;y<H;y++) for(let x=0;x<W;x++)
             if(x<F.x0 || x>F.x1 || y<F.y0 || y>F.y1) px(x,y,COL.BLACK);
-    } else paintDashboard();      // full cockpit art + scrolling map panel + road name
+    } else { paintDashboard(); drawDamage(); }   // cockpit art + map panel + road name; S36 damage gauge
     setProj(PROJ_STD);            // anything outside render() sees the normal projection
     if(SNM.active) snmDrawHUD();
 
@@ -3244,7 +3677,6 @@ function csPaint(){
     }
     if(CS.ready){
         const pick = CS_PADSEL!==null ? 'UP/DOWN THEN A'
-                   : IS_TOUCH ? 'TAP AN OPTION'
                    : 'ENTER 1 TO '+n;
         zxCentre(cctx, pick, ROW_ENTER, CS_BLACK, CS_GREEN);
     }
@@ -3608,7 +4040,7 @@ function stepsPaint(){
         if(i < STEPS_LIST.length-1) stepsArrow(r + ST_ROWS/2);
     });
     if(STEPS.blink < 20){
-        const prompt = PAD_USED ? 'PRESS A' : (IS_TOUCH ? 'TAP TO START' : 'PRESS ANY KEY');
+        const prompt = PAD_USED ? 'PRESS A' : 'PRESS ANY KEY';
         zxCentre(sctx, prompt, ROW_ENTER, ST_BLACK, ST_MAGENTA);
     }
 }
@@ -3739,17 +4171,18 @@ function ctrlPaint(){
     ctLabel('STEER',      1, 9,  49, 75, 10);
     if(sat) zxText(sctx, '& WALK', 0, 10, CT_BLACK, CT_YELLOW);
     // right: face buttons
-    if(sat) ctLabel('IN/OUT', 25, 7, 198, 59, 3);          // Y (X works too)
+    if(sat) ctLabel('IN/OUT', 25, 5, 198, 43, 3);          // Y (X works too) — S35: up a row for TURBO
+    ctLabel('TURBO',     25, 7, 198, 59, PAD_MAP.turbo);    // S35: X
     ctLabel('RESET',     25, 10, 198, 83, PAD_MAP.reset);
     // below the pad
     ctLabel('HANDBRAKE', 22, 17, 200, 135, PAD_MAP.handbrake);
     ctLabel('OPTIONS',    8, 17, 100, 135, PAD_MAP.options);
     // keyboard
     zxCentre(sctx, 'KEYS: W A S D OR ARROWS', 19, CT_BLACK, CT_YELLOW);
-    zxCentre(sctx, 'SHIFT HANDBRAKE  SPACE RESET', 20, CT_BLACK, CT_YELLOW);
-    zxCentre(sctx, sat ? 'E IN/OUT  ESC OPTIONS' : 'ESC OPTIONS', 21, CT_BLACK, CT_YELLOW);
+    zxCentre(sctx, 'SHIFT HANDBRAKE  SPACE TURBO', 20, CT_BLACK, CT_YELLOW);
+    zxCentre(sctx, sat ? 'E IN/OUT  R RESET  ESC OPTIONS' : 'R RESET  ESC OPTIONS', 21, CT_BLACK, CT_YELLOW);
     if(STEPS.blink < 20){
-        const prompt = PAD_USED ? 'PRESS A' : (IS_TOUCH ? 'TAP TO START' : 'PRESS ANY KEY');
+        const prompt = PAD_USED ? 'PRESS A' : 'PRESS ANY KEY';
         zxCentre(sctx, prompt, 23, CT_BLACK, CT_YELLOW);
     }
 }
@@ -3775,7 +4208,7 @@ function modePaint(){
         zxText(sctx, (i+1)+'.', COL_NUM,  r, ink, pap);
         zxText(sctx, label,     COL_NAME, r, ink, pap);
     });
-    zxCentre(sctx, MODE.padSel!==null ? 'UP/DOWN THEN A' : (IS_TOUCH ? 'TAP A MODE' : 'ENTER 1'),
+    zxCentre(sctx, MODE.padSel!==null ? 'UP/DOWN THEN A' : 'ENTER 1',
              ROW_ENTER, MD_BLACK, MD_YELLOW);
 }
 // fromEmbed: the map came from the built-in Harlow snapshot, so
@@ -5398,7 +5831,7 @@ function accelSndTick(){
     indSndTick(inDrive);                                    // handbrake-turn indicator clicks
     if(!S.buf) return;
     const accelerating = inDrive && INPUT.throttle>ACCEL_SND_MINTHR &&
-                         CAR.speed>=0 && CAR.speed < DRIVE_P.maxFwd*ACCEL_SND_TOP &&
+                         CAR.speed>=0 && CAR.speed < (DRIVE_P.maxFwd + (CAR.turbo ? DRIVE_P.turboAdd : 0))*ACCEL_SND_TOP &&
                          S.sinceRise <= ACCEL_SND_HOLD;
     if(!accelerating){ if(S.playing) accelSndStop(); return; }
     if(S.ac.state==='suspended'){ S.ac.resume().catch(()=>{}); return; }
@@ -5466,7 +5899,7 @@ function titlePrompt(){
     const blink = () => {
         if(TITLE.done) return;
         ttctx.drawImage(TITLE.img, 0, 184, 256, 8, 0, 184, 256, 8);
-        if(on) zxCentre(ttctx, IS_TOUCH ? 'TAP TO START' : 'PRESS ANY KEY', 23, '#FFFFFF', '#000000');
+        if(on) zxCentre(ttctx, 'PRESS ANY KEY', 23, '#FFFFFF', '#000000');
         on = !on;
         TITLE.raf = setTimeout(blink, 500);
     };
@@ -5538,11 +5971,12 @@ const DENSITY_STEPS = [0.25, 0.5, 0.75, 1.0];
 let SHOW_DEBUG = false;          // Advanced: debug readout overlay
 
 // Gamepad button map — editable from Advanced > INPUTS.
-const PAD_MAP = { handbrake:0, reset:1, options:9, throttle:7, brake:6 };
+const PAD_MAP = { handbrake:0, turbo:2, reset:1, options:9, throttle:7, brake:6 };   // S35: X = turbo
 const PAD_NAMES = ['A','B','X','Y','LB','RB','LT','RT','BACK','START',
                    'L-STICK','R-STICK','UP','DOWN','LEFT','RIGHT'];
 const REMAPPABLE = [
     { key:'handbrake', label:'HANDBRAKE' },
+    { key:'turbo',     label:'TURBO'     },
     { key:'reset',     label:'RESET'     },
     { key:'options',   label:'OPTIONS'   },
 ];
@@ -5621,7 +6055,8 @@ const KEY_HELP = [
     ['S / DOWN',  'BRAKE, REVERSE'],
     ['A / D',     'STEER'],
     ['SHIFT',     'HANDBRAKE'],
-    ['SPACE',     'RESET CAR'],
+    ['SPACE',     'TURBO'],
+    ['R',         'RESET CAR'],
     ['ESC',       'OPTIONS'],
     ['',          ''],
     ['B',         'BUILDINGS'],
@@ -5641,7 +6076,7 @@ function optsInputItems(){
         act:   ()=>{ OPTS.binding = r.key; optsPaint(); },
     }));
     items.push({ label:'RESET TO DEFAULT', act:()=>{
-        PAD_MAP.handbrake=0; PAD_MAP.reset=1; PAD_MAP.options=9; optsPaint(); } });
+        PAD_MAP.handbrake=0; PAD_MAP.turbo=2; PAD_MAP.reset=1; PAD_MAP.options=9; optsPaint(); } });
     items.push({ label:'BACK', act:()=>{ OPTS.page='adv'; OPTS.sel=0; optsPaint(); } });
     return items;
 }
@@ -5906,6 +6341,8 @@ function siteClock(){ const t = siteLeft(); return p2(t.d)+':'+p2(t.h)+':'+p2(t.
 
 // Small digital clock in the game's 3×5 font (one ':' added).
 F35[':'] = [0b000,0b010,0b000,0b010,0b000];
+F35['('] = [0b010,0b100,0b100,0b100,0b010];   // S35: for (SHIFT) / (SPACE)
+F35[')'] = [0b010,0b001,0b001,0b001,0b010];
 function siteTiny(c, s, x, y, ink){
     c.fillStyle = ink;
     for(const ch of s){
@@ -6008,7 +6445,7 @@ function siteRender(){
           + '<div class="list">'
           + SITE_VIDEOS.map((x,i)=>'<button class="rom opt'+(i===SITE.vid?' on':'')+'" data-v="'+i+'"><span>'+(i+1)+'</span>'+x.label+'</button>').join('')
           + '</div>'
-          + '<p class="rom prompt">'+(IS_TOUCH ? 'TAP A VIDEO' : 'ENTER 1 OR 2')+'</p>';
+          + '<p class="rom prompt">'+'ENTER 1 OR 2'+'</p>';
     } else if(P==='timer'){
         h = '<h2 class="rom st">TIMER</h2>'
           + '<canvas id="site-timer" width="256" height="64" role="timer" aria-label="Time until release"></canvas>'
@@ -6091,7 +6528,7 @@ setInterval(()=>{
 // Top of the play window: EARLY DEMO - NOT FINAL GAME. Bottom: a bobbing
 // TRY THE HANDBRAKE pointer (the pad's face buttons, A flashing). It goes once
 // the player has held a handbrake turn for about a second and a half.
-const DEMO = { hbFrames:0, tried:false, t:0 };
+const DEMO = { hbFrames:0, tried:false, tbFrames:0, turboTried:false, t:0 };
 const DEMO_TRY_FRAMES = 30;                       // 1.5 s at 20 Hz
 function siteDemoOverlay(){
     DEMO.t++;
@@ -6101,31 +6538,40 @@ function siteDemoOverlay(){
     if(!DEMO.tried && CAR.hbAmt > 0.5 && Math.abs(CAR.steer) > 0.2 && Math.abs(CAR.speed) > 0.02){
         if(++DEMO.hbFrames >= DEMO_TRY_FRAMES) DEMO.tried = true;
     }
-    const show = !DEMO.tried;
-    if(!show) return;
-    // Bottom-left corner, clear of the car (which sits bottom-centre): a corner
-    // of the pad with its four face buttons in a diamond, like the CONTROLS
-    // screen. The bottom one (A = handbrake) flashes, with a line out to the words.
-    const Y = '#FFFF00', K = '#000000';
-    const disc = (cx, cy, col) => {               // 7-px round button
-        ctx.fillStyle = col;
-        [3,5,7,7,7,5,3].forEach((w, k)=> ctx.fillRect(cx - (w>>1), cy - 3 + k, w, 1));
+    // S35: a second hint for TURBO, cleared after 1.5 s of turbo.
+    if(!DEMO.turboTried && CAR.turbo){
+        if(++DEMO.tbFrames >= DEMO_TRY_FRAMES) DEMO.turboTried = true;
+    }
+    // S35: half-size hints in the 3x5 font, laid out like the real pad: TURBO
+    // (X, the left face button) bottom-left, HANDBRAKE (A) bottom-right. Each is
+    // a little corner of the pad with its four face buttons; the one to press
+    // blinks white. Keyboard players also get the key in brackets.
+    const Y = '#FFFF00', K = '#000000', WH = '#FFFFFF', flash = ((DEMO.t/5)|0) % 2 === 0;
+    const dot = (x, y, col)=>{ ctx.fillStyle = col; ctx.fillRect(x-1, y, 3, 1); ctx.fillRect(x, y-1, 1, 3); };
+    const pad = (left, lit)=>{                    // 17x15 pad corner, rounded on the inner top
+        const x0 = left ? 1 : VIEW_X1 - 17, cx = x0 + 8, cy = 88;
+        ctx.fillStyle = K;
+        ctx.fillRect(x0, 83, 17, 13);
+        ctx.fillRect(left ? x0 : x0 + 2, 82, 15, 1);
+        ctx.fillRect(left ? x0 : x0 + 4, 81, 13, 1);
+        const at = { Y:[cx, cy-4], X:[cx-4, cy], B:[cx+4, cy], A:[cx, cy+4] };
+        for(const k in at) dot(at[k][0], at[k][1], k === lit ? (flash ? WH : K) : Y);
     };
-    ctx.fillStyle = K;                            // the pad body, rounded top-right corner
-    ctx.fillRect(2, 66, 34, 30); ctx.fillRect(2, 63, 30, 3); ctx.fillRect(2, 61, 25, 2);
-    const cx = 18, cy = 79, flash = ((DEMO.t/5)|0) % 2 === 0;
-    disc(cx, cy-8, Y); disc(cx-8, cy, Y); disc(cx+8, cy, Y);
-    disc(cx, cy+8, flash ? Y : '#FFFFFF');        // A, the handbrake
-    if(!flash){ ctx.fillStyle = K; ctx.fillRect(cx-1, cy+7, 3, 3); }   // ring when lit
-    // line from the A button out to the label
-    ctx.fillStyle = Y;
-    ctx.fillRect(cx+4, cy+8, 20, 1);              // across
-    ctx.fillRect(cx+23, 72, 1, cy+9-72);          // and up
-    ctx.fillRect(cx+23, 72, 4, 1);
-    const tx = 46;
-    zxText(ctx, 'TRY THE',   tx/8, 60/8, Y, K);
-    zxText(ctx, 'HANDBRAKE', tx/8, 68/8, Y, K);
-    if(!PAD_USED) zxText(ctx, '(SHIFT)', tx/8, 77/8, Y, K);
+    const label = (lines, x, right)=>{            // stacked lines sitting on the bottom edge
+        lines.forEach((t, i)=>{
+            const w = t.length * 4 - 1, xx = right ? x - w : x, yy = 95 - lines.length*6 + i*6;
+            ctx.fillStyle = K; ctx.fillRect(xx - 1, yy - 1, w + 2, 7);
+            siteTiny(ctx, t, xx, yy, Y);
+        });
+    };
+    if(!DEMO.turboTried){
+        pad(true, 'X');
+        label(['TRY THE', 'TURBO', 'AT TOP SPEED'].concat(PAD_USED ? [] : ['(SPACE)']), 21, false);
+    }
+    if(!DEMO.tried){
+        pad(false, 'A');
+        label(['TRY THE', 'HANDBRAKE'].concat(PAD_USED ? [] : ['(SHIFT)']), VIEW_X1 - 20, true);
+    }
 }
 
 // ── PLAY DEMO, and the controller rule on phones ───────────────────────────
@@ -6163,17 +6609,15 @@ const DEMO_INFO = [
     'AROUND.',
     '',
     'USE THE HANDBRAKE TO MAKE',
-    'TIGHT TURNS.',
-    '',
-    'CURRENTLY NO COLLISION',
-    'DETECTION ADDED.',
+    'TIGHT TURNS. HOLD TURBO FOR',
+    'EXTRA SPEED.',
 ];
 function demoInfoPaint(){
     sctx.fillStyle = MD_YELLOW; sctx.fillRect(0, 0, 256, 192);
     zxCentre(sctx, 'CRUISE MODE', 2, MD_BLACK, MD_YELLOW);
     DEMO_INFO.forEach((l, i)=>{ if(l) zxCentre(sctx, l, 5 + i, MD_BLACK, MD_YELLOW); });
     if(STEPS.blink < 20){
-        const prompt = PAD_USED ? 'PRESS A' : (IS_TOUCH ? 'TAP TO START' : 'PRESS ANY KEY');
+        const prompt = PAD_USED ? 'PRESS A' : 'PRESS ANY KEY';
         zxCentre(sctx, prompt, 22, MD_BLACK, MD_YELLOW);
     }
 }
