@@ -1315,7 +1315,8 @@ const DRIVE_P = {
                            // body angle up to 24° (turn frame 2, keep < 0.625).
                            // Above it, frame 1 as before.
     steerVisSpd:    1.073, // 80 mph
-    steerSlowTurn:  1.4,   // S37: slow-speed turns this much tighter on top (40%),
+    steerSlowTurn:  2.4,   // S43: arcade lock, ~4 m radius below 15 mph (S37 was 1.4);
+                           // slow-speed turns this much tighter on top,
                            // fading out by steerFastSpd and under the handbrake;
                            // the animation isn't affected
     steerSlowSpd:   0.2,   // ~15 mph
@@ -1332,7 +1333,10 @@ const DRIVE_P = {
     maxRev:  -0.27,        // top reverse speed (~20 mph; was -0.8 ≈ 60 mph)
     revAccel: 0.015,       // reverse acceleration (was 0.12)
     reverseDelay: 6,       // frames S must be held at a standstill before reverse
-    revTurn:  3.0,         // deg/frame at full reverse speed; right lock = nose LEFT
+    revTurn:  6.4,         // deg/frame at full reverse speed; right lock = nose LEFT
+                           // (S43: 6.4 = ~4 m radius; was 3.0)
+    pivotAt:  0.2,         // S43: the car turns about a point this far up the drawn
+                           // car from its rear edge (0 = rear bumper, 1 = front)
 };
 
 // ── Handbrake (S23, owner design): the handbrake doesn't slide or brake — it
@@ -1383,13 +1387,40 @@ const INPUT = { steer:0, throttle:0, brakeRev:0, handbrake:false, reset:false, t
 // Read an Xbox-style controller (standard mapping) and merge into INPUT. The pad
 // only ADDS to whatever the keyboard already set, so the two never fight: a held
 // key and a centred stick both work. Axis deadzone kills stick drift.
+// ─── Which controller? (S43c) ────────────────────────────────────────────────
+// Android Chrome can list non-controllers (fingerprint readers, pens) as
+// gamepads, often first. The pad last pressed or moved wins; until then a
+// standard-mapping pad; failing that anything shaped like a controller.
+const PAD_JUNK = /uinput|fingerprint|fpc|goodix|silead|elan|stylus|pen|keyboard|mouse|touch|consumer|headset|remote/i;
+const PAD_PICK = { active:-1 };
+function padUsable(g){ return g && g.connected !== false && !PAD_JUNK.test(g.id || ''); }
+function padPick(){
+    const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+    for(const g of gps){                       // anything being pressed or pushed now?
+        if(!padUsable(g)) continue;
+        let live = false;
+        for(const b of g.buttons) if(b && (b.pressed || b.value > 0.5)){ live = true; break; }
+        if(!live) for(const a of g.axes) if(Math.abs(a) > 0.6 && Math.abs(a) < 1.01){ live = true; break; }
+        if(live){ PAD_PICK.active = g.index; break; }
+    }
+    const act = PAD_PICK.active >= 0 ? gps[PAD_PICK.active] : null;
+    if(padUsable(act)) return act;
+    let shaped = null;
+    for(const g of gps){
+        if(!padUsable(g)) continue;
+        if(g.mapping === 'standard') return g;
+        if(!shaped && g.buttons.length >= 8 && g.axes.length >= 2) shaped = g;
+    }
+    return shaped;
+}
 function readGamepad(){
-    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-    let gp=null; for(const p of pads){ if(p){ gp=p; break; } }
+    const gp = padPick();   // S43c: the controller actually in use
     if(!gp) return;
     const DZ=0.18, dead=v=>Math.abs(v)<DZ?0:v;
     // left stick X → steer (axis 0). Add to keyboard steer, clamp to [-1,1].
-    const sx = dead(gp.axes[0]||0);
+    let sx = dead(gp.axes[0]||0);
+    if(gp.buttons[14] && gp.buttons[14].pressed) sx -= 1;   // S43c: D-pad steers too
+    if(gp.buttons[15] && gp.buttons[15].pressed) sx += 1;
     if(sx) INPUT.steer = Math.max(-1, Math.min(1, INPUT.steer + sx));
     // triggers: standard mapping puts RT=buttons[7], LT=buttons[6] as analogue.
     const rt = gp.buttons[7] ? gp.buttons[7].value : 0;
@@ -1574,9 +1605,15 @@ function updateCar(){
     // doesn't happen (it can still turn away, or slide along).
     if(CAR.yaw !== yawPrev){
         const F = carFoot(), r = CAR.yaw*Math.PI/180, mid = (F.f0 + F.f1)/2;
-        const cand = collideCandidates(CAR.x + Math.sin(r)*mid, CAR.z + Math.cos(r)*mid, 6);
-        const pNew = carPen(CAR.x, CAR.z, CAR.yaw, F, cand);
+        // S43: turn about the drawn car's rear axle (piv along the heading from
+        // CAR.x/z, negative = behind), not about CAR.x/z ~12 m in front of it.
+        const piv = F.f0 + (F.f1 - F.f0) * DRIVE_P.pivotAt, r0 = yawPrev*Math.PI/180;
+        const nx = CAR.x + (Math.sin(r0) - Math.sin(r)) * piv;
+        const nz = CAR.z + (Math.cos(r0) - Math.cos(r)) * piv;
+        const cand = collideCandidates(nx + Math.sin(r)*mid, nz + Math.cos(r)*mid, 6);
+        const pNew = carPen(nx, nz, CAR.yaw, F, cand);
         if(pNew > 0 && pNew > carPen(CAR.x, CAR.z, yawPrev, F, cand) + 1e-6){ CAR.yaw = yawPrev; CAR.velDir = velPrev; }
+        else { CAR.x = nx; CAR.z = nz; }
     }
 
     // ── MOVE: travel along velDir (the real momentum), plus any lane slide ──
@@ -2125,10 +2162,13 @@ function updateChaseCamera(){
     // S23: follow the TRAVEL direction (velDir), not the nose. Identical in
     // normal driving (they match); in a handbrake slide the view stays on the
     // line of travel and the car sprite shows the real slip angle against it.
-    const yawR = CAR.velDir * Math.PI/180;
-    // target eye = behind the car along its heading, raised up
-    const tx = CAR.x - Math.sin(yawR)*CHASE.back;
-    const tz = CAR.z - Math.cos(yawR)*CHASE.back;
+    // S43: ease the yaw first, then orbit the drawn car (see pivot_patch.py)
+    let dyaw = ((CAR.velDir - CAM.yaw + 540) % 360) - 180;
+    CAM.yaw = (CAM.yaw + dyaw * CHASE.yawLag + 360) % 360;
+    const yawR = CAR.velDir * Math.PI/180, camR = CAM.yaw * Math.PI/180;
+    const F = carFoot(), mid = (F.f0 + F.f1)/2, eye = mid + CHASE.back;   // eye→drawn car centre
+    const tx = CAR.x + Math.sin(yawR)*mid - Math.sin(camR)*eye;
+    const tz = CAR.z + Math.cos(yawR)*mid - Math.cos(camR)*eye;
     // tight position follow keeps the camera-to-car gap constant (no jump)
     CAM.x += (tx - CAM.x) * CHASE.posLag;
     CAM.z += (tz - CAM.z) * CHASE.posLag;
@@ -2137,9 +2177,6 @@ function updateChaseCamera(){
     CAR.y = groundHeightAt(CAR.x, CAR.z);
     const targetCamY = groundHeightAt(CAM.x, CAM.z) + CHASE.height;
     CAM.y += (targetCamY - CAM.y) * 0.35;
-    // gentle yaw ease toward the car's heading (shortest angular path)
-    let dyaw = ((CAR.velDir - CAM.yaw + 540) % 360) - 180;
-    CAM.yaw = (CAM.yaw + dyaw * CHASE.yawLag + 360) % 360;
     CAM.pitch = CHASE.pitch;
 }
 
@@ -2310,6 +2347,9 @@ function __decodeFrame(fr){
     return {w:fr.w,h:fr.h,ox:fr.ox,oy:fr.oy,px};
 }
 const CAR_TURN = CAR_SPRITES.turns.map(__decodeFrame);
+// S43d: the other cars' own model (owner's voxel_car (2).json), baked like yours
+const TRAF_SPRITES = {"anchor":[100,90],"turns":[{"w":26,"h":20,"ox":-13,"oy":-40,"rows":[".5K16.5",".4K18.4",".3K20.3",".3K20.3",".3K2G16K2.3",".3K1G18K1.3",".2K2G18K2.2",".1K3G18K3.1",".1K24.1","K26","K26","K26","K2G1K6G8K6G1K2","K26","K26","K2G1K3G14K3G1K2","K26",".1K5.1K1.1K8.1K1.1K5.1",".1K24.1",".1K1.1K1.2K1.1K1.2K1.2K1.2K1.1K1.2K1.1K1.1"]},{"w":29,"h":20,"ox":-12,"oy":-40,"rows":[".4K17.8",".3K20.6",".3G1K20.5","K2G3K13G5K1.5","K2G3K2G16K1.5","K2G3K2G16K2.4","K3G1K3G16K3.3","K7G16K4.2","K28.1","K29","K29",".1K28",".1K4G2K6G7K9",".2K27",".2K15G7K3G1K1",".3K3G1K2G14K6",".3K25.1",".3G1K3.1K1.1K1.2K1.1K2.1K2.1K7.1",".4K24.1",".4K4.1K2.1K1.16"]},{"w":35,"h":20,"ox":-15,"oy":-40,"rows":[".7K17.11",".6K21.8",".5K1G1K22.6","K5G5K11G7K1.6","K5G6K2G15K2.5","K4G3K1G3K2G16K1.5","K6G5K2G16K2.4","K1G1K6G2K4G10K9.2","K1G1K33","K1G1K33",".1G1K33",".2K21G4K8",".3K18G4K10",".4K5G2K24",".5K4G2K10G10K4",".7K7G1K2G6K12",".8K17.4K6",".9K1G2K5.1K1.1K1.1K13",".11K17.7",".12K6.17"]},{"w":41,"h":20,"ox":-18,"oy":-40,"rows":[".13K15.13",".9K24.8",".8K1G2K22.8",".6K3G6K9G9K1.7","K8G9K2G14K1.7","K7G10K3G14K2.5","K8G3K1G5K3G14K3.4","K2G1K9G4K5G5K14.1","K2G2K10G1K26",".1K1G1K37.1","K2G2K36.1",".2G1K26G5K7",".4K37",".7K9G2K16G3K2G1K1",".9K7G1K1G1K8G7K7",".11K5G3K3G1K3G1K12.2",".13K3G1K1G1K12.1K9",".15K2G3K2.3K12.4",".17G1K12.11",".20K4.17"]},{"w":46,"h":20,"ox":-21,"oy":-40,"rows":[".17K15.14",".12K25.9",".12G2K23.9",".9K3G5K1G2K8G9K1.8","K11G6K1G5K3G12K1.7","K10G13K3G12K2.6","K11G5K1G6K3G10K8.2","K17G6K4G3K15.1","K3G2K15G2K23.1",".1K2G3K39.1",".1K2G1K1G1K32G1K7",".2K1G3K29G2K9",".5K18G2K19G1K1",".8K15G3K11G4K4.1",".11K11G2K1G1K7G3K8.2",".15K5.1K1G1K1G1K1G1K18.1",".18K5G1K1G2K16.3",".21K2G4K10.1K1.7",".24G2K9.11",".28K2.16"]},{"w":48,"h":19,"ox":-23,"oy":-40,"rows":[".19K16.13",".15K24.9",".14K1G1K21G2K1.8",".11K3G7K1G2K7G9K1.7",".4K10G14K3G10K1.6","K13G7K1G7K4G9K3.4","K13G7K1G7K4G6K10","K18G2K1G7K20","K4G2K18G3K21","K4G3K41",".2K3G2K33G3K5",".1K3G1K1G1K41",".3K1G3K22G3K11G3K2",".7K9.1K11G2K1G1K7G3K5.1",".12K16G2K1G2K15",".18K7.2K1G1K1G1K1G1K13.2",".22K6G2K1G2K10.5",".27K2G3K9.7",".32K6.10"]},{"w":50,"h":19,"ox":-25,"oy":-40,"rows":[".22K19.9",".18K24.8",".17K21G4.8",".11K6G7K1G4K6G7K1.7",".6K11G7K1G7K4G7K1.6",".2K14G8K1G9K3G6K6.1","K15G9K1G8K4G3K10",".1K19G4K1G8K17",".1K29G2K18",".1K4G3K38G1K3",".1K4G1K1G2K41",".3K2G2K1G1K38G1K2",".2K3G5.1K23G4K7G2K2.1",".5K1G2K9.1K1.1K13G5K6G1K5",".13K11.1K2.1K5G1K2G3K10.1",".20K11.1K1G3K1G2K8.3",".27K7G5K1.1K4.5",".33K1G3K7.6",".41K1.8"]},{"w":49,"h":18,"ox":-25,"oy":-40,"rows":[".22K18.9",".19K21G1.8",".18K20G4.7",".17K2G7K1G7K4G5.6",".6K12G8K1G8K3G5K3.3",".3K14G9K1G9K3G3K7","K16G10K1G9K4G1K8","K21G4K2G8K14","K49","K5G3K41","K5G1K1G2K40","K4G2K2G1K29G2K9",".2K3G1K1G2K28G4K8",".1K4G5K4.1K1.3K17G2K1G3K7",".7G1K16.1K1.1K1.1K1.3K3G1K1G2K1G1K6.1",".19K17G2K2G2K5.2",".30K2.1K4G4K5.3",".41K2.1K2.3"]},{"w":49,"h":17,"ox":-26,"oy":-40,"rows":[".23K17.9",".21K19G1.8",".20K20G2.7",".19K2G8K1G8K3G2.6",".6K14G9K1G8K4G1K5.1",".4K15G10K1G9K10",".2K16G11K1G9K10","K19G9K2G9K10","K49","K49",".1K6G3K39",".1K5G2K1G2K30G3K5",".1K5G1K1G1K1G1K29G2K1G2K4",".3K3G2K1G3.1K1.1K1.1K23G1K1G1K1G1K4",".2K5G3K19.1K1.1K1.2K1.3G3K1G3K3",".16K1.1K1.1K20G2K1G2K4",".39K2G3K5"]},{"w":50,"h":16,"ox":-25,"oy":-40,"rows":[".21K18.11",".21G1K18.10",".19G2K20.9",".19G1K2G7K2G8K2G1K3.5",".4K14G1K2G8K2G9K6.4",".3K14G1K2G9K2G9K8.2",".2K17G10K2G9K9.1","K19G10K2G7K11.1","K50","K49.1","K7G3K32G3K5","K7G4K31G3K5","K6G2K2G2K29G2K1G2K4",".1K5G1K1G1K2G1K28G2K1G1K1G1K3.1",".2K4G6K28G3K1G2K3.1",".2K5G4K31G3K4.1"]},{"w":49,"h":18,"ox":-24,"oy":-41,"rows":[".30K5.14",".19K19.11",".18K1G1K20.9",".17G4K20.8",".16G5K1G8K1G8K4.6",".15K1G4K1G9K1G9K5.4",".1K15G3K2G9K1G9K8.1",".1K16G1K2G10K1G8K10",".1K19G10K19","K49",".1K48",".1K41G3K4",".1K7G3K30G2K1G2K3",".1K6G2K1G3K28G1K1G1K1G1K3",".1K6G1K1G1K2G1K19.1K1.2K1.1K1.1G3K1G2K3",".1K6G2K1G3.1K1.3K1.1K1.1K20G3K4",".2K5G5K17.1K3.1K2.13",".2K4.1K1G4.37"]},{"w":50,"h":19,"ox":-25,"oy":-41,"rows":[".27K8.15",".19K20.11",".18G3K20.9",".17K1G5K14G3K2.8",".16G7K2G7K1G8K2.7",".15G7K2G8K1G8K5.4",".5K11G6K2G9K1G7K9","K18G3K2G10K1G7K9","K22G7K21",".1G1K48",".1K1G1K41G3K3",".1K1G2K39G2K1G1K3",".1K2G1K8G3K28G1K2G1K3",".2K9G5K26G2K2G1K2.1",".2K8G3K1G2K14.1K1.1K1.1K1.1K6G3K4",".3K7G2K1G1K1G1K1.2K1.1K1.1K1.1K18.7",".4K4.1K1G3K1G2K14.1K1.18",".5K7G3K2.1K1.31",".6K1.1K1.41"]},{"w":49,"h":19,"ox":-25,"oy":-41,"rows":[".25K9.15",".18K23.8",".17K1G2K22.7",".17G8K11G4K2.7",".15K1G9K2G6K1G7K2.6",".14K1G9K2G7K1G8K6.1",".11K4G9K2G8K1G6K8","K18G5K2G9K1G3K11","K21G2K1G4K21","G1K44G1K3","G1K43G3K2","K3G2K38G1K2G1K2","K2G5K36G1K2G1K1.1",".1K3G1K1G1K8G3K21.2K1G4K3",".1K13G1K2G2K14.1K10G1.4",".2K12G1K1G1K1G1K3.1K1.2K12.11",".4K9G2K2G2K11.19",".6K4.1K2G5K4.1K1.25",".7K8G2.32"]},{"w":49,"h":20,"ox":-26,"oy":-41,"rows":[".25K10.14",".18K24.7",".18G2K22.7",".17G10K9G5K2.6",".16G12K2G5K1G6K2.5",".15G12K2G6K1G6K6.1",".14K1G12K1G7K2G4K7.1",".6K12G8K2G7K13.1","K23G3K2G2K19","K44G2K3",".1G2K41G1K1G1K2",".1G4K1G1K40.2",".1K3G1K1G2K2G1K30.1K1G3K3",".1K3G4K2G2K7G3K16.1K5G2K1.2",".2K6G1K1G2K7G1K1G2K19.7",".2K16G1K3G1K5.1K8.12",".4K14G1K3G1.1K8.17",".7K9.1G3K1G1K5.22",".10K9G3.27",".12K5.32"]},{"w":46,"h":21,"ox":-25,"oy":-41,"rows":[".23K11.12",".17K23.6",".16K1G1K22.6",".16G11K6G1K1G4K2.5",".15K1G12K2G4K1G5K5.1",".14K1G12K2G6K1G4K5.1",".13K1G13K2G6K1G3K6.1",".9K7G11K2G6K11",".3K21G3K2G1K16","K43G1K2","K1G1K43.1","K1G2K1G1K36G1K1G1K1.1","K1G2K1G1K2G3K32G1K2.1","K7G2K2G1K1G3K6G2K17.5",".1K4G2K2G1K1G1K1G3K6G1K1G1K13.8",".2K19G1K2G1K10.11",".2K19G1K2G1K6.15",".5K16G2K5.18",".9K13G2K1.21",".13K9.24",".17K1.28"]},{"w":41,"h":21,"ox":-23,"oy":-41,"rows":[".19K14.8",".14K23.4",".14K21G1K1.4",".13K1G13K4G1K1G3K2.3",".13K1G13K2G3K1G4K4",".12G15K2G4K1G3K4",".11K1G15K2G4K1G1K6",".10K3G14K2G3K9",".5K18G4K12G1K1",".1K37G2K1","K39G1.1","K1G2K34G2K2","K1G3K2G1K2G1K29.2","K1G2K2G2K1G2K1G1K1G2K1G2K6G2K11.4","K6G1K1G2K1G1K1G2K1G3K5G2K8.7","K11G1K1G1K2G3K4G1K8.9",".1K22G1K1G1K4.11",".1K9.1K12G1K1G1K2.13",".6K9.1K1.1K6G2.15",".13K11.17",".19K2.20"]},{"w":36,"h":21,"ox":-21,"oy":-41,"rows":[".16K16.4",".12K21.3",".12K19G1K1.3",".11K1G15K2G4K2.1",".11K1G15K1G5K3",".10K1G15K2G5K3",".9K1G17K2G2K5",".9K1G17K2G1K6",".6K17G4K9",".3K33",".1K35","K34G1.1","K2G3K1G1K1G1K25.2",".1K1G3K1G1K1G1K1G3K1G1K1G1K2G3K4G1K6.3",".1K5G1K1G1K1G3K1G1K1G1K1G4K4G1K5.4",".1K6G1K1G2K2G1K2G1K2G3K9.5",".1K14G1K13.7",".2K5.2K1.1K14G1K2.8",".2K13.1K1.1K8G1.9",".10K1.1K13.11",".21K3.12"]},{"w":29,"h":21,"ox":-17,"oy":-41,"rows":[".11K16.2",".8K19.2",".8K18G1.2",".8K1G15K1G2K2",".7K2G15K1G2K2",".6K1G17K1G2K2",".6K1G18K1G1K2",".6K1G17K5",".4K25",".2K27",".1K28","K29","K28.1","K1G4K1G1K1G2K1G2K2G1K1G1K2G3K5.1","K1G4K1G1K1G2K1G2K2G1K1G1K2G3K4.2","K10G1K1G1K2G1K1G1K2G3K4.2","K10G1K5G1K9.3",".1K25.3",".1K4.1K1.1K1.1K1.2K1.2K1.4K5.3",".1K1.1K2.1K1.1K1.1K5.1K4.1K4.4",".21K1.2K1.4"]},{"w":26,"h":20,"ox":-13,"oy":-41,"rows":[".5K16.5",".4K18.4",".4K18.4",".4K1G16K1.4",".4K1G16K1.4",".3G1K1G16K1G1.3",".3K1G18K1.3",".2K2G18K2.2",".2K22.2",".1K24.1",".1K24.1","K26","K26","K2G3K2G1K1G2K1G2K1G2K1G1K2G3K2","K2G3K2G1K1G1K2G2K2G1K1G1K2G3K2","K2G3K2G1K1G1K2G2K2G1K1G1K2G3K2","K8G1K8G1K8","K26",".1K4.1K1.1K1.1K2.1K3.1K1.1K1.1K4.1",".1K4.1K1.1K1.1K2.1K3.1K1.1K1.1K4.1"]},{"w":29,"h":21,"ox":-12,"oy":-41,"rows":[".2K16.11",".2K19.8",".2G1K18.8","K1G3K1G15K1.8","K1G3K1G15K2.7","K1G3K1G17K1.6","K2G1K1G18K1.6","K5G17K1.6","K25.4","K27.2","K28.1","K29",".1K28",".1K5G3K2G1K1G1K2G2K1G2K1G1K1G4K1",".2K4G3K2G1K1G1K2G2K1G2K1G1K1G4K1",".2K1G1K2G3K2G1K17",".3K9G1K5G1K10",".3G1K24.1",".3K5.4K1.4K2.1K1.1K1.1K4.1",".4K4.1K4.1K1.1K3.1K1.1K1.1K2.1K1.1",".4K1.2K1.21"]},{"w":36,"h":21,"ox":-15,"oy":-41,"rows":[".4K16.16",".3K21.12",".3G2K19.12",".1K2G4K3G14K1.11","K2G6K1G15K1.11","K3G5K2G15K1.10","K5G2K2G16K2.9","K6G1K2G17K1.9","K10G3K17.6","K33.3","K1G1K33.1",".1G1K34",".2K25G1K1G1K1G3K2",".3K6G1K4G3K2G1K1G1K1G3K1G1K1G1K1G3K1.1",".4K5G1K4G4K1G1K1G1K1G3K1G1K1G1K5.1",".5K4G2K3G3K9G1K1G1K6.1",".7K2G1K10G1K14.1",".8K1G2K14.1K1.2K5.2",".9G1K8.1K1.1K1.1K11.2",".11K15.10",".12K3.21"]},{"w":41,"h":21,"ox":-18,"oy":-41,"rows":[".8K14.19",".4K23.14",".4K1G2K20.14",".3K2G6K3G13K1.13","K4G4K1G3K2G13K1.13","K4G8K2G14K1.12","K6G6K2G15K1.11","K8G4K2G13K4.10","K1G1K12G2K20.5","K1G2K37.1",".1G2K38","K1G2K36G1K1",".2G1K28G1K6G2K1",".4K11G2K6G2K6G1K6G2K1",".7K8G2K5G3K6G1K2G1K6",".9K6G3K4G3K2G1K13",".11K4G1K1G1K22.1",".13K2G3K22.1",".15G3K5.1K1.1K9.6",".17K11.13",".20K2.19"]},{"w":46,"h":21,"ox":-21,"oy":-41,"rows":[".12K11.23",".6K23.17",".6K1G1K20G1K1.16",".5K1G5K1G2K5G11.16",".1K5G5K1G4K2G12K1.15",".1K5G11K2G12K1.14",".1K6G3K1G6K2G13K1.13","K11G6K2G10K8.9","K2G2K12G1K2G3K21.3","K2G2K42",".1K2G1K42",".1K1G1K1G1K36G1K1G2K1",".1K2G1K33G2K2G1K1G2K1",".5K17G2K7G2K1G1K2G2K7",".8K13G3K7G2K12.1",".11K10G1K1G2K19.2",".15K6G2K1G1K19.2",".18K3G4K16.5",".21K1G2K12.10",".24K9.13",".28K1.17"]},{"w":49,"h":20,"ox":-23,"oy":-41,"rows":[".14K10.25",".7K24.18",".7K22G2.18",".6K2G5K1G2K7G9.17",".5K2G6K1G6K2G11.16",".1K6G6K1G6K3G11.15",".1K6G14K1G12K1.14",".1K10G1K1G8K2G7K13.6","K18G3K3G1K24","K3G2K44","K2G1K1G1K42G1.1",".2G1K2G1K40G2.1","K3G3K1.1K30G1K3G1K1G1K3.1",".2K1G2K5.1K16G3K7G2K9.1",".7K19G2K1G2K6G2K8.2",".12K8.1K5G1K1G3K16.2",".17K8.1G3K1G1K14.4",".22K5G1K1G3.1K9.7",".27G3K9.10",".32K5.12"]},{"w":49,"h":19,"ox":-24,"oy":-41,"rows":[".15K9.25",".8K23.18",".7K22G2K1.17",".7K2G5K10G8.17",".6K2G7K1G6K2G9K1.15",".1K6G8K1G7K2G9K1.14","K8G6K1G8K2G9K4.11","K9G5K1G9K2G4K19","K19G6K24","K3G2K43G1","K2G4K42G1","K2G1K1G2K43",".1K1G4K36G1K6","K3G4K1.2K21G4K7G1K5.1",".4G1K10.1K14G2K1G2K13.1",".11K12.2K1.1K3G1K1G1K1G2K11.2",".19K11G2K1G3K9.4",".25K1.1K4G5K2.1K4.6",".32G2K8.7"]},{"w":50,"h":19,"ox":-25,"oy":-41,"rows":[".15K8.27",".11K20.19",".9K20G2K1.18",".8K2G4K13G5K1.17",".7K2G8K1G7K2G6K1.16",".4K5G8K1G8K2G6K1.15","K9G7K1G9K2G6K11.5","K9G7K1G10K2G3K18","K21G7K22","K49.1","K3G3K43.1","K3G4K42.1","K3G1K2G1K28G3K8G1K2.1",".1K2G2K1G2K26G5K9.2","K4G3K6.1K1.1K1.1K1.1K14G2K1G3K8.2",".7K18.1K1.1K1.1K1.2K1G1K1G1K1G2K7.3",".18K1.1K14G2K1G3K1.1K4.4",".31K1.1K2G3K7.5",".41K1.1K1.6"]},{"w":49,"h":18,"ox":-25,"oy":-41,"rows":[".14K5.30",".11K19.19",".9K20G1K1.18",".8K20G4.17",".6K4G8K1G8K1G4K1.16",".4K5G9K1G9K1G4K1.15",".1K8G9K1G9K2G3K15.1","K10G8K1G10K2G1K16.1","K19G10K19.1","K49","K48.1","K4G3K41.1","K3G2K1G2K30G3K7.1","K3G1K1G1K1G1K28G3K1G2K6.1","K3G2K1G3.1K1.1K1.2K1.1K19G1K2G1K1G1K6.1","K4G3K20.1K1.1K1.3K1.1G3K1G2K6.1",".13K2.1K3.1K17G5K5.2",".37G4K1.1K4.2"]},{"w":50,"h":16,"ox":-25,"oy":-40,"rows":[".11K18.21",".10K18G1.21",".9K20G2.19",".5K3G1K2G8K2G7K2G1.19",".4K6G9K2G8K2G1K14.4",".2K8G9K2G9K2G1K14.3",".1K9G9K2G10K17.2",".1K11G7K2G10K19","K50",".1K49","K5G3K32G3K7","K5G3K31G4K7","K4G2K1G2K29G2K2G2K6",".1K3G1K1G1K1G2K28G1K2G1K1G1K5.1",".1K3G2K1G3K28G6K4.2",".1K4G3K31G4K5.2"]},{"w":49,"h":17,"ox":-23,"oy":-40,"rows":[".9K17.23",".8G1K19.21",".7G2K20.20",".6G2K3G8K1G8K2.19",".1K5G2K3G8K1G9K14.6","K10G9K1G10K15.4","K10G9K1G10K17.2","K10G9K2G9K19","K49","K49","K39G3K6.1","K5G3K30G2K1G2K5.1","K4G2K1G2K29G1K1G1K1G1K5.1","K4G1K1G1K1G1K23.1K1.1K1.1G3K1G2K3.3","K4G2K2G2.3K1.2K1.1K1.1K19G3K5.2","K4G2K1G2K20.1K1.1K1.16","K5G3K2.39"]},{"w":49,"h":18,"ox":-24,"oy":-40,"rows":[".9K18.22",".8G1K21.19",".7G4K20.18",".6G5K5G6K1G7K2.17",".3K3G5K3G8K1G8K12.6","K7G3K3G9K1G9K14.3","K8G1K4G9K1G10K16","K14G8K2G4K21","K49","K41G2K6","G1K39G2K1G1K5","K1G1K8G1K29G1K8","K8G4K28G1K2G1K3.2","K7G2K2G2K17.3K1.1K4G5K4.1",".1K6G1K1G2K1G1K3.3K1.1K1.1K1.1K16G1.7",".2K5G2K2G2K17.19",".3K5G4K4.1K2.30",".3K2.1K2.41"]},{"w":50,"h":19,"ox":-25,"oy":-40,"rows":[".9K19.22",".8K24.18",".8G4K21.17",".7G8K8G2K1G7K6.11",".6K1G8K3G7K1G7K11.6",".1K6G7K3G8K1G8K14.2","K10G3K4G8K1G9K15","K17G8K1G2K21.1","K49.1","K3G2K37G3K4.1","K41G2K1G1K4.1","K1G2K38G1K1G2K2.3",".1K2G2K7G4K23.1G3K1G1K3.2","K5G1K6G1K2G2K13.1K1.1K9G2K1.5",".1K10G2K3G1K5.1K2.1K11.13",".3K8G2K2G2K1.1K11.20",".5K4.1K1G5K7.27",".6K7G3K1.33",".8K1.41"]},{"w":48,"h":19,"ox":-25,"oy":-40,"rows":[".13K16.19",".9K24.15",".8G3K23.14",".7K1G9K11G6K3.11",".6K1G10K3G6K2G6K10.4",".4K3G10K3G7K1G7K13","K10G6K4G7K1G7K13","K14G1K5G7K21","K21G1K20G2K4","K41G1K1G1K4","K5G3K33G2K3.2","G1K39G2K1G1K3.1","K2G3K12G2K23G1K2.3",".1K4G4K7G1K1G2K11.1K9.7","K8G1K6G2K2G1K16.12",".2K13G1K3G1K1.2K7.18",".5K10G2K1G2K6.22",".7K9G3K2.27",".10K6.32"]},{"w":46,"h":20,"ox":-25,"oy":-40,"rows":[".14K15.17",".9K25.12",".9K25.12",".8K1G9K9G1K1G5K3.9",".7K1G12K3G5K1G6K11",".6K2G12K3G6K1G6K10",".2K6G12K3G6K1G5K11",".1K14G4K5G5K17",".1K23G2K15G2K3",".1K44.1","K7G2K33G1K2.1","K8G3K29G2K2.2","K1G1K2G1K11G1K24.5",".1K3G6K10G1K1G1K15.8",".2K7G4K7G1K1G1K12.11",".1K14G1K5G1K1G1K1.1K5.15",".3K16G2K1G1K5.18",".7K1.1K9G5K2.21",".11K10G1.24",".16K2.28"]},{"w":41,"h":20,"ox":-23,"oy":-40,"rows":[".13K15.13",".8K24.9",".8K23G1K1.8",".7K1G9K10G1K1G3K3.6",".7K1G14K2G4K1G4K8",".5K2G14K3G10K7",".4K3G14K3G5K1G2K9",".1K13G7K4G4K9G1K2","K41",".1K39.1",".1K36G1K3","K7G6K25G1.2","K12G1K24.4","K1G1K2G4K15G2K9.7","K7G8K7G1K1G1K7.9",".2K12G1K3G1K3G2K6.11","K9.1K12G1K1G1K3.13",".4K12.3K2G3K2.15",".11K12G1.17",".17K4.20"]},{"w":35,"h":20,"ox":-20,"oy":-40,"rows":[".11K17.7",".8K21.6",".6K22G1K1.5",".6K1G8K12G2K6",".5K2G15K2G2K1G3K5",".5K1G16K2G3K1G2K5",".4K2G16K2G3K1G1K6",".2K8G11K4G2K8","K35","K33G1K1","K33G1.1","K8G4K21.2","K10G4K18.3","K31.4","K4G10K16.5","K12G6K2G1K7.7","K6.4K17.8","K13.1K1.1K1.1K5G2K1.9",".7K17.11",".17K6.12"]},{"w":29,"h":20,"ox":-17,"oy":-40,"rows":[".8K17.4",".6K20.3",".5K20G1.3",".5K1G5K14G2K2",".5K1G16K2G3K2",".4K2G16K2G3K2",".3K3G16K3G1K3",".2K4G16K7",".1K28","K29","K29","K28.1","K9G7K6G2K4.1","K27.2","K1G1K3G7K15.2","K6G14K2G1K3.3",".1K25.3",".1K7.1K2.1K2.1K1.2K1.1K1.1K3G1.3",".1K24.4",".16K1.1K2.1K4.4"]}]};
+const TRAF_TURN = TRAF_SPRITES.turns.map(__decodeFrame);
 const CAR_CRASH = CAR_SPRITES.crash.map(__decodeFrame);
 console.log('%c[CAR] sprite system active — '+CAR_TURN.length+' turn frames + '+CAR_CRASH.length+' crash frames (press C to crash)','color:#0c0;font-weight:bold');
 const CARV = { dy:24 };
@@ -8018,11 +8058,7 @@ function snmBlocked(x, z){
 }
 
 // ── Gamepad (edge-triggered; runs inside the 20 Hz loop) ─────────────────────
-function snmPad(){
-    const pads=navigator.getGamepads ? navigator.getGamepads() : [];
-    for(const p of pads) if(p) return p;
-    return null;
-}
+function snmPad(){ return padPick(); }   // S43c
 function snmPadPoll(){
     const gp=snmPad(); if(!gp) return;
     const btn=i=>!!(gp.buttons[i] && gp.buttons[i].pressed);
@@ -9285,7 +9321,8 @@ function pedDrawAll(){ const q = []; pedQueue(q); trafQueue(q); q.sort((a,b)=>b.
 // map: a road's END within TRAF_TUNE.link wu of another road's vertex joins it
 // there (end-to-end continues; end-to-side can turn either way), and cars
 // passing that vertex on the other road may turn into it.
-const TRAF_CAP  = [34, 28, 23, 15, 9];    // by graphics level (ULTRA..FASTEST); always filled
+const TRAF_CAP  = [17, 14, 12, 8, 5];     // by graphics level (ULTRA..FASTEST); always filled
+                                          // (S43b: halved from [34, 28, 23, 15, 9])
 const TRAF_TUNE = {
     lane: 3.0,          // wu left of the centreline (UK: keep left; roads are 12 wide)
     link: 10,           // ends this close to another road's vertex are joined
@@ -9468,8 +9505,12 @@ function trafTick(){
         // ease onto the new line after a junction hop; plain driving tracks it exactly
         const jump = Math.hypot(P.x - c.x, P.z - c.z);
         const kf = jump > c.v + 0.6 ? 0.35 : 1;
+        const ox = c.x, oz = c.z;
         c.x += (P.x - c.x)*kf; c.z += (P.z - c.z)*kf; c.y = P.y;
-        const dy = ((P.yaw - c.yaw + 540) % 360) - 180; c.yaw = (c.yaw + dy*(kf < 1 ? 0.3 : 0.6) + 360) % 360;
+        // S43e: point the way it's actually moving (not the interpolated tangent)
+        const mv = Math.hypot(c.x - ox, c.z - oz);
+        const want = mv > 0.03 ? Math.atan2(c.x - ox, c.z - oz)*180/Math.PI : P.yaw;
+        const dy = ((want - c.yaw + 540) % 360) - 180; c.yaw = (c.yaw + dy*(mv > 0.03 ? 0.5 : 0.15) + 360) % 360;
         const dx = c.x - CAM.x, dz = c.z - CAM.z;
         if(dx*dx + dz*dz > R2 || Ls.length > cap) Ls.splice(k, 1);
     }
@@ -9515,9 +9556,10 @@ function trafQueue(out){
         const sx = SCREEN_CX + g.cx*FOCAL/g.cz, sy = SCREEN_CY - g.cy*FOCAL/g.cz;
         if(sx < -60 || sx > VIEW_X1 + 60) continue;
         out.push({ depth: g.cz + e, ped: ()=>{
-            const rel = ((c.yaw - CAM.yaw + 540) % 360) - 180;
+            const sight = CAM.yaw + Math.atan2(g.cx, g.cz)*180/Math.PI;   // S43e: line of sight to it
+            const rel = ((c.yaw - sight + 540) % 360) - 180;
             const a = ((-rel) % 360 + 360) % 360;
-            trafBlit(CAR_TURN[Math.round(a/10) % 36], sx, sy, TRAF_TUNE.pxWu*FOCAL/g.cz, null, keep);
+            trafBlit(TRAF_TURN[Math.round(a/10) % 36], sx, sy, TRAF_TUNE.pxWu*FOCAL/g.cz, null, keep);   // S43d
         }});
     }
 }
@@ -9970,8 +10012,7 @@ let PAD_PREV = { up:false, down:false, left:false, right:false,
 let PAD_CITY = { up:false, down:false, a:false, b:false };
 let PAD_USED = false;   // a pad has been pressed this session (steps prompt says PRESS A)
 function optsPadPoll(){
-    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-    let gp=null; for(const p of pads){ if(p){ gp=p; break; } }
+    const gp = padPick();   // S43c
     if(gp){
         const btn = i => !!(gp.buttons[i] && gp.buttons[i].pressed);
         const ay  = gp.axes[1] || 0, ax = gp.axes[0] || 0;
@@ -10075,16 +10116,36 @@ if(IS_TOUCH){
     };
     fitWide(); window.addEventListener('resize', fitWide);
     const padNote = $('tp-pad');
-    const padConnected = () => {
-        const gps = navigator.getGamepads ? navigator.getGamepads() : [];
-        for(const g of gps) if(g && g.connected) return true;
-        return false;
-    };
+    const padConnected = () => !!padPick();   // S43c: a real controller, not a sensor
     setInterval(()=>{
         const driving = MAP_LOADED && gameEl.style.display!=='none';
         document.body.classList.toggle('driving', driving);
         padNote.style.display = (driving && !padConnected()) ? 'block' : 'none';
     }, 150);
+}
+
+// ── Controller test (S43c): open the page as index.html?pad ──────────────────
+if(/[?&]pad\b/.test(location.search)){
+    const box = document.createElement('pre');
+    box.style.cssText = 'position:fixed;left:0;bottom:0;z-index:9999;margin:0;max-width:100vw;max-height:60vh;overflow:auto;'
+                      + 'background:rgba(0,0,0,.85);color:#0f0;font:12px/1.35 monospace;padding:6px;pointer-events:none;white-space:pre-wrap';
+    document.body.appendChild(box);
+    setInterval(()=>{
+        const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+        const use = padPick();
+        let t = 'CONTROLLER TEST  (press any pad button if nothing is listed)\n';
+        let any = false;
+        for(const g of gps){
+            if(!g) continue; any = true;
+            const on = []; g.buttons.forEach((b,i)=>{ if(b && (b.pressed || b.value > 0.05)) on.push(i + (b.value > 0 && b.value < 1 ? '=' + b.value.toFixed(2) : '')); });
+            t += (use === g ? '>> USED ' : '        ') + '#' + g.index + ' ' + JSON.stringify(g.id)
+               + '\n         mapping:' + (g.mapping || 'NONE') + (PAD_JUNK.test(g.id||'') ? '  (ignored: not a controller)' : '')
+               + '  buttons:' + g.buttons.length + ' axes:' + g.axes.length
+               + '\n         pressed:[' + on.join(' ') + ']  axes:[' + g.axes.map(a=>a.toFixed(2)).join(' ') + ']\n';
+        }
+        if(!any) t += '  (none listed)\n';
+        box.textContent = t;
+    }, 100);
 }
 
 // ── Boot ── title screen first; it hands off to csStartIntro() on the first click.
