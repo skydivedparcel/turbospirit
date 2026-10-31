@@ -136,16 +136,24 @@ body { background: #000; min-height: 100vh; display: flex; flex-direction: colum
 #trace-warn.on { display:block; }
 #trace-warn .flash { animation:zxblink 0.6s steps(1) infinite; }
 #trace-count { display:flex; align-items:center; gap:6px; font-weight:bold; letter-spacing:1px; }
-#tc-meter { display:flex; gap:2px; }
-#tc-meter i { display:block; width:9px; height:14px; border:2px solid #000; background:transparent; }
-#tc-meter i.on   { background:#00C000; }
-#tc-meter i.hot  { border-color:#C00000; }
-#tc-meter i.hot.on { background:#C00000; border-color:#000; }
 #trace-count.over #tc-score { color:#C00000; }
 #trace-wrap { position:relative; }
 #trace-zoom { position:absolute; left:10px; top:10px; display:flex; gap:4px; }
 #trace-zoom .tbtn { padding:3px 9px; }
 #trace.page-roads .pg-scenery, #trace.page-scenery .pg-roads { display:none; }
+#trace-loadwrap { position:relative; display:inline-block; }
+#trace-loadmenu { display:none; position:absolute; top:100%; left:0; z-index:30; flex-direction:column; gap:2px; margin-top:2px; min-width:100%; }
+#trace-loadmenu.open { display:flex; }
+#trace-loadmenu .tbtn { white-space:nowrap; text-align:left; }
+#trace-terrain { display:none; width:948px; background:#C0C000; color:#000; border:4px solid #000; padding:4px 12px;
+    font-size:11px; font-weight:bold; letter-spacing:2px; text-align:center; }
+#trace-terrain.on { display:block; }
+#trace-terrain.bad { background:#C00000; color:#fff; }
+#trace-terrain .tbtn { padding:2px 8px; margin-left:10px; font-size:11px; }
+#world-pick { display:none; position:fixed; left:0; top:0; right:0; bottom:0; background:rgba(0,0,0,.7); z-index:10000; align-items:center; justify-content:center; }
+#world-pick.on { display:flex; }
+#world-pick-box { background:#C0C000; border:4px solid #000; padding:14px 18px; width:420px; max-height:70vh; display:flex; flex-direction:column; gap:8px; font-family:monospace; font-weight:bold; letter-spacing:2px; font-size:12px; }
+#world-pick-list { overflow-y:auto; display:flex; flex-direction:column; gap:3px; }
 #trace-hint { width:948px; font-size:11px; color:#000; letter-spacing:2px; font-weight:bold; text-transform:uppercase; text-align:center; }
 
 /* ── Junction editor (Session 10, step 1: zoomable ribbon inspector) ──────── */
@@ -237,29 +245,36 @@ body.touch #map {
 <div id="trace">
     <div id="trace-bar">
         <span id="trace-title">1 &middot; ROADS</span>
-        <span id="trace-count"><span id="tc-label">ROAD LOAD</span><span id="tc-meter"></span><span id="tc-score">0/10</span></span>
-        <button id="trace-none" class="tbtn pg-roads">NONE</button>
-        <button id="trace-spawn" class="tbtn pg-roads">SPAWN</button>
-        <button id="trace-load" class="tbtn pg-roads">LOAD</button>
+        <span id="trace-count"><span id="tc-score">0 ROADS</span></span>
+        <span id="trace-loadwrap" class="pg-roads">
+            <button id="trace-load" class="tbtn">LOAD &#9662;</button>
+            <span id="trace-loadmenu">
+                <button id="trace-load-local" class="tbtn">LOAD LOCAL</button>
+                <button id="trace-load-world" class="tbtn">LOAD WORLD</button>
+            </span>
+        </span>
+        <button id="trace-bigger" class="tbtn pg-roads">LOAD BIGGER MAP</button>
         <button id="trace-back" class="tbtn pg-roads">&#8249; BACK</button>
         <button id="trace-next" class="tbtn primary pg-roads" disabled>SCENERY &#8250;</button>
         <button id="trace-roads" class="tbtn pg-scenery">&#8249; ROADS</button>
         <button id="trace-build" class="tbtn primary pg-scenery" disabled>BUILD &#8250;</button>
     </div>
     <div id="trace-warn"></div>
+    <div id="trace-terrain"></div>
     <div id="trace-main">
         <div id="trace-wrap">
             <canvas id="trace-canvas" width="760" height="520"></canvas>
             <div id="trace-zoom">
+                <button id="tz-fit" class="tbtn" title="Reset the view: show the whole map">RESET</button>
                 <button id="tz-in"  class="tbtn" title="Zoom in (or mouse wheel)">+</button>
                 <button id="tz-out" class="tbtn" title="Zoom out">&minus;</button>
-                <button id="tz-fit" class="tbtn" title="Show the whole map">FIT</button>
             </div>
         </div>
         <div id="trace-palette"></div>
     </div>
     <div id="trace-hint"></div>
 </div>
+<div id="world-pick"><div id="world-pick-box"><div id="world-pick-title">LOAD WORLD</div><div id="world-pick-list"></div><button id="world-pick-close" class="tbtn">CLOSE</button></div></div>
 
 <div id="game">
 <div id="stage">
@@ -4545,7 +4560,9 @@ const ROAD_HW_M = 6, PAVE_W_M = 2.5;// for building setback (matches engine)
 // point. So we (a) let you pick the catchment radius, (b) rank roads by class +
 // length and keep only a budget of them, and (c) AUTO-FIT the scale so whatever
 // we keep always spans a consistent, drivable size on screen.
-const RADIUS    = 1500;  // metres: fixed 1.5 km catchment around the place
+let   RADIUS    = 1500;  // metres: catchment around the place (S46d: LOAD BIGGER MAP raises it)
+const RADIUS_STEPS = [1500, 2250, 3000];
+let   BIG_STEP  = 0;
 const SCALE     = 0.6;   // fixed scale: 1 real metre = 0.6 world units
 const MIN_LEN   = 90;    // metres: drop roads shorter than this (real-world)
 const KEEP_FRAC = 0.20;  // prune toward ~20% of roads, but never break drivability
@@ -4571,6 +4588,7 @@ const ELEV_MAX_GRADE = 0.28;// steepest plausible road slope (rise/run); steeper
                             // steps between samples are clamped as data artifacts
 let   ELEV_RANGE_M = 0;     // real height range (m) of the last build, for readout
 let   ELEV_NOTE = '';       // human-readable outcome of the last elevation fetch
+let   ELEV_LAST_ERR = '';   // S46d: last provider error, shown on the road screen
 // road-class priority: higher = more likely to be kept (major through-roads first)
 const CLASS_RANK = { raceway:8, motorway:7, trunk:7, primary:6, secondary:5, tertiary:4,
                      unclassified:3, residential:2, living_street:1 };
@@ -5866,12 +5884,13 @@ async function fetchElevations(locs){
         for(let i=0;i<locs.length;i+=ELEV_BATCH){
             const batch = locs.slice(i, i+ELEV_BATCH);
             let res = null;
-            try { res = await prov.run(batch); } catch(e){ res = null; }
-            if(!res && i>0){             // one retry mid-run (a busy public server)
-                await new Promise(r=>setTimeout(r, (prov.gap||250)*2));
-                try { res = await prov.run(batch); } catch(e){ res = null; }
+            // S46d: up to 3 tries per batch, INCLUDING the first (one transient 429/timeout on batch 1
+            // used to throw the whole provider away and, with the others blocked, build the map flat).
+            for(let attempt = 0; attempt < 3 && !res; attempt++){
+                if(attempt) await new Promise(r=>setTimeout(r, (prov.gap||250) * 2 * attempt + 400));
+                try { res = await prov.run(batch); } catch(e){ res = null; ELEV_LAST_ERR = prov.name+': '+(e && e.message || e); }
             }
-            if(!res){ ok = false; console.warn('[elevation] '+prov.name+' failed at batch '+(i/ELEV_BATCH+1)); break; }
+            if(!res){ ok = false; console.warn('[elevation] '+prov.name+' failed at batch '+(i/ELEV_BATCH+1)+' ('+ELEV_LAST_ERR+')'); break; }
             for(const h of res) out.push(h);
             // be gentle with public endpoints between batches
             if(i+ELEV_BATCH < locs.length) await new Promise(r=>setTimeout(r, prov.gap||250));
@@ -5887,7 +5906,8 @@ async function fetchElevations(locs){
 // interpolation into this grid. One shared surface = roads meet cleanly, no
 // per-road disagreement, no staircase. Heights are real metres above sea level.
 let TOPO_GRID = null;   // { lat0, lon0, n, halfM, heights:[n*n], minH, rangeM }
-const TOPO_N = 24;      // grid resolution (24×24 = 576 pts ≈ 6 batches)
+let   TOPO_N = 24;      // grid resolution (24×24 = 576 pts ≈ 6 batches); S46d: grows with the radius
+let   TOPO_STATUS = { ok:false, msg:'' };   // S46d: shown on the road screen so a flat map is never a mystery
 
 async function sampleTopoGrid(lat0, lon0){
     const n = TOPO_N, half = RADIUS;
@@ -5897,10 +5917,12 @@ async function sampleTopoGrid(lat0, lon0){
         const mz =  half - (2*half)*(r /(n-1));    // north metres (row 0 = north)
         locs.push(unproject(mx, mz, lat0, lon0));
     }
+    ELEV_LAST_ERR = '';
     const elev = await fetchElevations(locs);
-    if(!elev) return null;
-    const minH = Math.min(...elev), maxH = Math.max(...elev);
+    if(!elev){ TOPO_STATUS = { ok:false, msg: ELEV_LAST_ERR || 'NO TERRAIN SERVICE REACHABLE' }; return null; }
+    let minH = Infinity, maxH = -Infinity; for(const v of elev){ if(v<minH) minH=v; if(v>maxH) maxH=v; }
     TOPO_GRID = { lat0, lon0, n, halfM: half, heights: elev, minH, rangeM: maxH-minH };
+    TOPO_STATUS = { ok:true, msg:'' };
     return TOPO_GRID;
 }
 
@@ -6323,7 +6345,7 @@ const ZONES = {
     towncom:   { label:'SHOPS',   col:'#0000D8', dither:'#D8D8D8', scen:1,
         build:(r)=>({type:'shop', hM:6+r()*3, hwM:6.0+r()*2, hdM:5.0+r()*1.5,
                      gapP:0.18, extra:1, spacing:17}), hedge:false, trees:false },
-    citycom:   { label:'TOWN',   col:'#0000D8', dither:'#00D8D8', scen:1,
+    citycom:   { label:'CITY',   col:'#0000D8', dither:'#00D8D8', scen:1,
         build:(r)=>({type:'tower', hM:24+r()*22, hwM:7.0+r()*2.5, hdM:6.0+r()*2,
                      gapP:0.10, extra:1, spacing:22}), hedge:false, trees:false },
     fields:    { label:'FIELDS',col:'#00D800', scen:3,
@@ -7132,21 +7154,28 @@ document.addEventListener('keydown', e=>{
     else if(e.key==='Escape') modeBack();
 }, true);
 
-async function startBuild(){
-    const place = placeInput.value.trim();
+async function startBuild(opts){
+    const place = (opts && opts.place) || placeInput.value.trim();
     if(!place){ setStatus('Type a place name first.', 'err'); return; }
     goBtn.disabled = true;
+    const _radiusBefore = RADIUS, _stepBefore = BIG_STEP;
+    if(!(opts && opts.carry)){ RADIUS = RADIUS_STEPS[0]; BIG_STEP = 0; }   // a fresh place starts at the normal size
+    TOPO_N = Math.min(36, Math.round(24 * RADIUS / 1500));
     try {
         ZXLOAD.start();
-        setStatus('\u2460 Geocoding "'+place+'" \u2026');
-        const geo = await fetchJSON('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(place),
-            { headers:{'Accept':'application/json'} });
-        if(!geo.length) throw new Error('Could not find that place. Try adding a county or city, e.g. "Hatfield, Hertfordshire".');
-        const lat0=parseFloat(geo[0].lat), lon0=parseFloat(geo[0].lon);
+        let lat0, lon0, geoName;
+        if(opts && opts.lat0 !== undefined){ lat0 = opts.lat0; lon0 = opts.lon0; geoName = place; }
+        else {
+            setStatus('\u2460 Geocoding "'+place+'" \u2026');
+            const geo = await fetchJSON('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(place),
+                { headers:{'Accept':'application/json'} });
+            if(!geo.length) throw new Error('Could not find that place. Try adding a county or city, e.g. "Hatfield, Hertfordshire".');
+            lat0=parseFloat(geo[0].lat); lon0=parseFloat(geo[0].lon); geoName = geo[0].display_name;
+        }
 
         // STEP 1: sample the terrain grid up front — the shared height surface
         // everything else reads from. If it fails, we carry on flat.
-        setStatus('\u2460 Found: '+geo[0].display_name+'\n\u2461 Sampling terrain ('+TOPO_N+'\u00d7'+TOPO_N+' grid) \u2026');
+        setStatus('\u2460 Found: '+geoName+'\n\u2461 Sampling terrain ('+TOPO_N+'\u00d7'+TOPO_N+' grid) \u2026');
         const grid = await sampleTopoGrid(lat0, lon0);
         if(grid){
             console.log('[topo] '+TOPO_N+'x'+TOPO_N+' grid, range '+grid.rangeM.toFixed(0)+' m');
@@ -7326,8 +7355,14 @@ out geom;`;
         // built into the drivable map by buildFromSelection().
         setStatus('');
         if(STEPS_PENDING){ STEPS_PENDING=false; stepsShow(()=>openTrace(cand, place, lat0, lon0)); }
-        else openTrace(cand, place, lat0, lon0);
+        else { openTrace(cand, place, lat0, lon0); if(opts && opts.carry) restoreTraceCarry(opts.carry); }
     } catch(err){
+        if(opts && opts.carry){
+            RADIUS = _radiusBefore; BIG_STEP = _stepBefore;
+            TOPO_N = Math.min(36, Math.round(24 * RADIUS / 1500));
+            alert('Could not load a bigger map.\n\n'+err.message+'\n\nYour current map and picks are unchanged.');
+            traceBiggerBtn();
+        } else
         setStatus('Build failed: '+err.message, 'err');
     } finally {
         ZXLOAD.stop();
@@ -7400,13 +7435,14 @@ function openTrace(cand, place, lat0, lon0){
     };
 
     TRACE = { cand, place, sel:new Set(), proj:M, view:V, hover:-1, lat0, lon0,
-              spawnMode:false, spawn:null, inv:INV,
+              spawnMode:false, spawn:null, inv:INV, tunnels:{}, seaDrag:null,
               page:'roads', editMode:false, paintTool:'suburban', zones:{}, churches:[],
               chunkCache:{}, painting:false, autoZone:null,
               bounds:{minx,maxx,minz,maxz}, seaGrid, sea:new Set() };
     buildAutoZoneClassifier();
     buildPalette();
     setTracePage('roads');
+    traceTerrainBanner(); traceBiggerBtn();
 }
 
 // ── Road load meter ─────────────────────────────────────────────────────────
@@ -7427,28 +7463,43 @@ function roadDensity(){ let d=0; for(const i of TRACE.sel) d+=roadShare(i); retu
 function loadPoints(d){ return d/ROAD_LOAD_PER_POINT; }        // unclamped, fractional
 
 function updateTraceCount(){
-    const n=TRACE.sel.size, d=roadDensity(), over=d>=ROAD_DENSITY_WARN;
+    const n=TRACE.sel.size, d=roadDensity();
     let score=Math.min(10, Math.floor(loadPoints(d)+1e-9));
     if(n>0 && score<1) score=1;                                 // any roads = at least 1
-    const warnAt=Math.round(ROAD_DENSITY_WARN/ROAD_LOAD_PER_POINT);   // 8
-    const meter=document.getElementById('tc-meter');
-    let html=''; for(let k=1;k<=10;k++) html+='<i class="'+(k<=score?'on ':'')+(k>=warnAt?'hot':'')+'"></i>';
-    meter.innerHTML=html;
-    document.getElementById('tc-score').textContent = score+'/10 \u00b7 '+n+(n===1?' ROAD':' ROADS');
-    document.getElementById('trace-count').classList.toggle('over', over);
+    const dense = score>=9;                                     // S46d: the meter is gone; only the warning remains
+    document.getElementById('tc-score').textContent = n+(n===1?' ROAD':' ROADS');
+    document.getElementById('trace-count').classList.toggle('over', dense);
     document.getElementById('trace-next').disabled  = n===0;
     document.getElementById('trace-build').disabled = n===0;
     const w=document.getElementById('trace-warn');
-    w.classList.toggle('on', over && TRACE.page==='roads');
-    if(over) w.innerHTML = '<span class="flash">WARNING</span> &nbsp;GAME WORLD MAY RUN SLOW &middot; UNPICK SOME ROADS TO GET BELOW '+warnAt+'/10';
+    w.classList.toggle('on', dense && TRACE.page==='roads');
+    if(dense) w.innerHTML = '<span class="flash">WARNING</span> &nbsp;MAP MAY BE TOO DENSE';
+    ensureCar();
+}
+function traceTerrainBanner(){
+    const el=document.getElementById('trace-terrain'); if(!el) return;
+    el.classList.add('on');
+    if(TOPO_GRID){
+        el.classList.remove('bad');
+        el.innerHTML='HILLS OK &middot; TERRAIN RANGE '+TOPO_GRID.rangeM.toFixed(0)+' M &middot; MAP RADIUS '+(RADIUS/1000).toFixed(2)+' KM';
+    } else {
+        el.classList.add('bad');
+        el.innerHTML='NO HILLS: TERRAIN DATA NOT LOADED ('+String(TOPO_STATUS.msg||'SERVICE FAILED').slice(0,60).toUpperCase()+') &middot; MAP WILL BE FLAT <button id="trace-retry-hills" class="tbtn">RETRY HILLS</button>';
+        document.getElementById('trace-retry-hills').addEventListener('click', async ev=>{
+            const b=ev.target; b.disabled=true; b.textContent='LOADING...';
+            try { ZXLOAD.start(); await sampleTopoGrid(TRACE.lat0, TRACE.lon0); } catch(e){ TOPO_STATUS={ok:false,msg:String(e&&e.message||e)}; }
+            finally { ZXLOAD.stop(); }
+            traceTerrainBanner();
+        });
+    }
 }
 
 // ── Page switch: 1 · ROADS  →  2 · SCENERY ──────────────────────────────────
 const TRACE_HINTS = {
-    roads:   IS_TOUCH ? 'TAP ROADS TO PICK &middot; KEEP ROAD LOAD BELOW 8/10 &middot; PINCH TO ZOOM, DRAG TO MOVE &middot; SCENERY &#8250; WHEN READY'
-                      : 'CLICK ROADS TO PICK &middot; KEEP ROAD LOAD BELOW 8/10 &middot; WHEEL TO ZOOM, DRAG TO MOVE &middot; SCENERY &#8250; WHEN READY',
+    roads:   IS_TOUCH ? 'TAP ROADS TO PICK &middot; DRAG THE CAR TO MOVE THE START &middot; PINCH TO ZOOM, DRAG TO MOVE &middot; SCENERY &#8250; WHEN READY'
+                      : 'CLICK ROADS TO PICK &middot; DRAG THE CAR TO MOVE THE START &middot; WHEEL TO ZOOM, DRAG TO MOVE &middot; SCENERY &#8250; WHEN READY',
     scenery: IS_TOUCH ? 'EVERY ROAD STARTS AS FIELDS &middot; PICK A ZONE, DRAG ONE FINGER TO PAINT &middot; PINCH OR TWO FINGERS TO ZOOM AND MOVE &middot; BUILD WHEN READY'
-                      : 'EVERY ROAD STARTS AS FIELDS &middot; PICK A ZONE AND PAINT ALONG ROADS &middot; WHEEL TO ZOOM, RIGHT-DRAG TO MOVE &middot; BUILD WHEN READY',
+                      : 'EVERY ROAD STARTS AS FIELDS &middot; PICK A ZONE AND PAINT ALONG ROADS &middot; SEA/LAND: DRAG A BOX &middot; WHEEL TO ZOOM, DRAG EMPTY MAP TO MOVE &middot; BUILD WHEN READY',
 };
 function setTracePage(page){
     if(page==='scenery' && TRACE.sel.size===0) page='roads';   // nothing to dress yet
@@ -7580,9 +7631,12 @@ function buildPalette(){
         pal.appendChild(makeLegendRow(key, Z.label, Z.col, Z.dither, false));
     }
     // tools: CHURCH stamp, SEA paint, LAND (erase sea). (AUTO removed: unpainted = FIELDS)
+    pal.appendChild(makeLegendRow('__tunnel',   'TUNNEL',    '#000000', '#C0C0C0', false));
+    pal.appendChild(makeLegendRow('__tunerase', 'TUN OFF',   '#C0C000', null, true));
     pal.appendChild(makeLegendRow('__church',   'CHURCH',    CHURCH_COL, null, false));
     pal.appendChild(makeLegendRow('__sea',      'SEA',       SEA_SWATCH, null, false));
     pal.appendChild(makeLegendRow('__seaerase', 'LAND',      '#C0C000', null, true));
+    pal.appendChild(makeLegendRow('__hand',     'MOVE',      '#C0C000', null, true));
 }
 function selectTool(t){ TRACE.paintTool=t; buildPalette(); }
 
@@ -7628,10 +7682,18 @@ function drawTrace(){
                 const mxp=(a[0]+b[0])/2, mzp=(a[1]+b[1])/2;
                 const zk=effectiveZone(i,mxp,mzp);
                 const ma=M(a[0],a[1]), mb=M(b[0],b[1]);
+                const _tun = isTunnelAt(i,mxp,mzp);
+                if(_tun){                       // S46d: black sleeve + white dashes = tunnel
+                    tctx.save(); tctx.lineWidth=11; tctx.strokeStyle='#000';
+                    tctx.beginPath(); tctx.moveTo(ma.x,ma.y); tctx.lineTo(mb.x,mb.y); tctx.stroke();
+                    tctx.restore(); tctx.lineWidth=5;
+                }
                 tctx.beginPath(); tctx.moveTo(ma.x,ma.y); tctx.lineTo(mb.x,mb.y);
                 const Z=ZONES[zk];
                 tctx.strokeStyle = Z ? zoneStroke(Z.col, Z.dither) : '#000';
                 tctx.stroke();
+                if(_tun){ tctx.save(); tctx.setLineDash([4,6]); tctx.lineWidth=2; tctx.strokeStyle='#fff';
+                          tctx.beginPath(); tctx.moveTo(ma.x,ma.y); tctx.lineTo(mb.x,mb.y); tctx.stroke(); tctx.restore(); }
             }
             continue;
         }
@@ -7649,43 +7711,20 @@ function drawTrace(){
         const m=TRACE.mouse ? {x:TRACE.mouse[0], y:TRACE.mouse[1]-8} : M(mid[0],mid[1]);
         tctx.font='12px monospace'; tctx.textAlign='center';
         let label=c.name;
-        if(TRACE.page==='roads'){
-            const sh=roadShare(TRACE.hover);
-            label += '  LOAD '+(TRACE.sel.has(TRACE.hover)?'\u2212':'+')+loadPoints(sh).toFixed(1);
-        }
         tctx.lineWidth=3; tctx.strokeStyle='#C0C000'; tctx.strokeText(label, m.x, m.y-6);
         tctx.fillStyle='#000'; tctx.fillText(label, m.x, m.y-6);
     }
 
-    // Spawn marker: a dot at the chosen start, with an arrow showing the heading
-    // the car will take — straight at the centre of the selected roads (the point
-    // that becomes the world origin), so it previews "facing the map centre".
-    if(TRACE.spawn){
-        const sel=[...TRACE.sel];
-        const pool = sel.length ? sel : TRACE.cand.map((_,i)=>i);
-        let cx=0, cz=0, n=0;
-        for(const idx of pool) for(const p of TRACE.cand[idx].chain){ cx+=p[0]; cz+=p[1]; n++; }
-        cx/=n||1; cz/=n||1;                              // centroid in real metres
-        const sp=M(TRACE.spawn.x, TRACE.spawn.z);
-        const ct=M(cx, cz);
-        let ang=Math.atan2(ct.y-sp.y, ct.x-sp.x);        // screen-space heading to centre
-        const L=26;
-        // arrow shaft
-        tctx.strokeStyle='#0000C0'; tctx.lineWidth=3; tctx.lineCap='round';
-        tctx.beginPath(); tctx.moveTo(sp.x,sp.y);
-        tctx.lineTo(sp.x+Math.cos(ang)*L, sp.y+Math.sin(ang)*L); tctx.stroke();
-        // arrow head
-        const hx=sp.x+Math.cos(ang)*L, hy=sp.y+Math.sin(ang)*L;
-        tctx.beginPath();
-        tctx.moveTo(hx,hy);
-        tctx.lineTo(hx-Math.cos(ang-0.5)*9, hy-Math.sin(ang-0.5)*9);
-        tctx.lineTo(hx-Math.cos(ang+0.5)*9, hy-Math.sin(ang+0.5)*9);
-        tctx.closePath(); tctx.fillStyle='#0000C0'; tctx.fill();
-        // spawn dot
-        tctx.beginPath(); tctx.arc(sp.x,sp.y,5,0,Math.PI*2);
-        tctx.fillStyle='#0000C0'; tctx.fill();
-        tctx.lineWidth=2; tctx.strokeStyle='#fff'; tctx.stroke();
+    // Sea area being dragged (rubber band)
+    if(TRACE.seaDrag){
+        const s=TRACE.seaDrag, x=Math.min(s.x0,s.x1), y=Math.min(s.y0,s.y1), w=Math.abs(s.x1-s.x0), hh=Math.abs(s.y1-s.y0);
+        tctx.fillStyle = s.erase ? 'rgba(192,192,0,0.55)' : 'rgba(0,216,216,0.45)';
+        tctx.fillRect(x,y,w,hh);
+        tctx.setLineDash([6,4]); tctx.lineWidth=2; tctx.strokeStyle='#0000D8'; tctx.strokeRect(x,y,w,hh); tctx.setLineDash([]);
     }
+
+    // Start-car marker (replaces the old SPAWN dot): the real car sprite, facing the map centre.
+    drawCarMarker();
 
     // Church markers (purple cross discs) — drawn in any mode so they're visible.
     if(TRACE.churches && TRACE.churches.length){
@@ -7750,6 +7789,8 @@ function realPointOn(ci, cx, cy){
 function paintAt(cx, cy){
     // Sea tools paint area cells, not road chunks — handled separately.
     if(TRACE.paintTool==='__sea' || TRACE.paintTool==='__seaerase') return paintSeaAt(cx,cy);
+    if(TRACE.paintTool==='__hand') return false;
+    if(TRACE.paintTool==='__tunnel' || TRACE.paintTool==='__tunerase') return paintTunnelAt(cx,cy);
     const ci=selectedRoadAt(cx,cy); if(ci<0) return false;
     const rp=realPointOn(ci,cx,cy); if(!rp) return false;
     const name=TRACE.cand[ci].name;
@@ -7808,7 +7849,13 @@ document.getElementById('tz-fit').addEventListener('click', ()=>{
 // (a left press that moves > 4 px is a pan, not a road click).
 let TPAN = null;
 tcanvas.addEventListener('mousedown', e=>{
-    const leftPan = e.button===0 && TRACE.page==='roads' && !TRACE.spawnMode;
+    let leftPan = e.button===0 && TRACE.page==='roads' && !TRACE.spawnMode;
+    if(e.button===0 && TRACE.editMode){                  // S46d: scenery page — drag empty map (or the MOVE tool) to pan
+        const [qx,qy]=canvasXY(e), t=TRACE.paintTool;
+        const area = (t==='__sea' || t==='__seaerase');
+        if(t==='__hand') leftPan = true;
+        else if(!area && (t==='__church' || selectedRoadAt(qx,qy)<0)) leftPan = true;
+    }
     if(e.button===1 || e.button===2 || leftPan){
         const [x,y]=canvasXY(e);
         TPAN = { x, y, ox:TRACE.view.ox, oy:TRACE.view.oy, moved:false, left:e.button===0 };
@@ -7848,9 +7895,12 @@ tcanvas.addEventListener('touchstart', e=>{
         TRACE.painting=false;
     } else if(pts.length===1 && (!TTOUCH || TTOUCH.mode!=='pinch')){
         const [x,y]=pts[0];
-        const paint = TRACE.editMode && TRACE.paintTool!=='__church';
+        const paint = TRACE.editMode && TRACE.paintTool!=='__church' && TRACE.paintTool!=='__hand' && (selectedRoadAt(x,y)>=0 || TRACE.paintTool==='__sea' || TRACE.paintTool==='__seaerase');
+        if(hitCar(x,y)){ TTOUCH={ mode:'car', moved:true }; e.preventDefault(); }
+        else {
         TTOUCH={ mode: paint?'paint':'pan', x0:x, y0:y, ox0:TRACE.view.ox, oy0:TRACE.view.oy, moved:false };
         if(paint){ e.preventDefault(); if(paintAt(x,y)) drawTrace(); }
+        }
     }
 }, {passive:false});
 tcanvas.addEventListener('touchmove', e=>{
@@ -7871,6 +7921,8 @@ tcanvas.addEventListener('touchmove', e=>{
         if(!TTOUCH.moved && Math.hypot(dx,dy)<6) return;
         TTOUCH.moved=true;
         V.ox=TTOUCH.ox0+dx; V.oy=TTOUCH.oy0+dy; clampView(); drawTrace();
+    } else if(TTOUCH.mode==='car'){
+        const [x,y]=pts[0]; moveCarTo(x, y+14);
     } else if(TTOUCH.mode==='paint'){
         const [x,y]=pts[0]; if(paintAt(x,y)) drawTrace();
     }
@@ -7889,8 +7941,8 @@ function canvasXY(e){
     return [ (e.clientX-r.left)*(TCW/r.width), (e.clientY-r.top)*(TCH/r.height) ];
 }
 tcanvas.addEventListener('mousedown', e=>{
-    if(e.button!==0 || !TRACE.editMode) return;
-    if(TRACE.paintTool==='__church') return;   // church placed on click, not drag
+    if(e.button!==0 || !TRACE.editMode || TPAN || TCAR) return;   // S46d: a pan / car drag in progress is not a paint
+    if(TRACE.paintTool==='__church' || TRACE.paintTool==='__hand') return;   // church placed on click, not drag
     const [x,y]=canvasXY(e);
     TRACE.painting=true;
     if(paintAt(x,y)) drawTrace();
@@ -7934,62 +7986,254 @@ tcanvas.addEventListener('click', e=>{
     updateTraceCount(); drawTrace();
 });
 
-// Snap a clicked screen point to the nearest point on a SELECTED road, store it
-// as the spawn (in real metres). The car will start there facing the map centre.
-function placeSpawn(cx, cy){
-    const M=TRACE.proj;
-    let best=null, bestD=1e9;
-    const sel=[...TRACE.sel];
-    const pool = sel.length ? sel : TRACE.cand.map((_,i)=>i);   // fall back to any road
+// ── S46d: start car (replaces the SPAWN button) ─────────────────────────────
+// A picture of the player's own car sits on the map; drag it along the picked roads to
+// move the start. Stored in TRACE.spawn (real metres) exactly as the old spawn point was.
+function updateSpawnBtn(){}   // (button removed)
+function snapRealToSelected(x, z){
+    let best=null, bestD=1e18;
+    const pool = TRACE.sel.size ? [...TRACE.sel] : [];
     for(const idx of pool){
         const c=TRACE.cand[idx];
         for(let i=1;i<c.chain.length;i++){
-            const a=M(c.chain[i-1][0],c.chain[i-1][1]), b=M(c.chain[i][0],c.chain[i][1]);
-            const dx=b.x-a.x, dy=b.y-a.y; const L2=dx*dx+dy*dy||1;
-            let t=((cx-a.x)*dx+(cy-a.y)*dy)/L2; t=Math.max(0,Math.min(1,t));
-            const px=a.x+t*dx, py=a.y+t*dy;
-            const d=Math.hypot(cx-px, cy-py);
-            if(d<bestD){
-                bestD=d;
-                // interpolate the real-metre position at parameter t on this segment
-                const ra=c.chain[i-1], rb=c.chain[i];
-                best={ x: ra[0]+(rb[0]-ra[0])*t, z: ra[1]+(rb[1]-ra[1])*t };
-            }
+            const a=c.chain[i-1], b=c.chain[i];
+            const dx=b[0]-a[0], dz=b[1]-a[1], L2=dx*dx+dz*dz||1;
+            let t=((x-a[0])*dx+(z-a[1])*dz)/L2; t=Math.max(0,Math.min(1,t));
+            const px=a[0]+t*dx, pz=a[1]+t*dz, d=(x-px)*(x-px)+(z-pz)*(z-pz);
+            if(d<bestD){ bestD=d; best={x:px, z:pz}; }
         }
     }
-    if(best){ TRACE.spawn=best; drawTrace(); }
+    return best;
+}
+function ensureCar(){
+    if(!TRACE || !TRACE.sel) return;
+    if(!TRACE.sel.size){ TRACE.spawn=null; return; }
+    if(TRACE.spawn){
+        const s=snapRealToSelected(TRACE.spawn.x, TRACE.spawn.z);
+        if(s && Math.hypot(s.x-TRACE.spawn.x, s.z-TRACE.spawn.z) > 3) TRACE.spawn=s;   // its road was un-picked: hop to the nearest picked one
+        return;
+    }
+    let best=-1, bl=-1; for(const i of TRACE.sel){ const L=roadLenM(i); if(L>bl){ bl=L; best=i; } }
+    const ch=TRACE.cand[best].chain, p=ch[Math.floor(ch.length/2)];
+    TRACE.spawn={ x:p[0], z:p[1] };                 // default: the middle of the longest picked road
+}
+const CAR_ICON = {};
+function carIcon(f){
+    if(CAR_ICON[f]) return CAR_ICON[f];
+    const fr=CAR_TURN[f], S=2, W=(fr.w+2)*S, H=(fr.h+2)*S;
+    const cv=document.createElement('canvas'); cv.width=W; cv.height=H; const c=cv.getContext('2d');
+    c.fillStyle='#0000D8';                           // blue halo so it reads on the yellow paper
+    for(let y=0;y<fr.h;y++) for(let x=0;x<fr.w;x++) if(fr.px[y*fr.w+x]) c.fillRect(x*S, y*S, 3*S, 3*S);
+    for(let y=0;y<fr.h;y++) for(let x=0;x<fr.w;x++){
+        const v=fr.px[y*fr.w+x]; if(!v) continue;
+        c.fillStyle = (v==='K') ? '#000' : '#fff'; c.fillRect((x+1)*S, (y+1)*S, S, S);
+    }
+    return CAR_ICON[f]={cv, W, H};
+}
+function carHeadingFrame(sp){
+    const sel=[...TRACE.sel]; let cx=0,cz=0,n=0;
+    for(const idx of sel) for(const p of TRACE.cand[idx].chain){ cx+=p[0]; cz+=p[1]; n++; }
+    const ct=TRACE.proj(cx/(n||1), cz/(n||1));
+    const dx=ct.x-sp.x, dy=ct.y-sp.y;
+    const bearing = (Math.hypot(dx,dy)<2) ? 0 : Math.atan2(dx, -dy)*180/Math.PI;   // clockwise from map-up
+    return (36 - Math.round(bearing/10) % 36 + 36) % 36;                            // sprite frames run the other way round
+}
+function drawCarMarker(){
+    TRACE.carHit=null;
+    if(!TRACE.spawn || !TRACE.sel.size) return;
+    const sp=TRACE.proj(TRACE.spawn.x, TRACE.spawn.z), ic=carIcon(carHeadingFrame(sp));
+    tctx.beginPath(); tctx.arc(sp.x, sp.y, 4, 0, Math.PI*2); tctx.fillStyle='#0000D8'; tctx.fill();   // pin on the road
+    const x=sp.x-ic.W/2, y=sp.y-ic.H-2;
+    tctx.drawImage(ic.cv, x, y);
+    TRACE.carHit={ x0:x-4, y0:y-4, x1:x+ic.W+4, y1:sp.y+8 };
+}
+function hitCar(x,y){ const h=TRACE.carHit; return !!(h && TRACE.spawn && x>=h.x0 && x<=h.x1 && y>=h.y0 && y<=h.y1); }
+function moveCarTo(x,y){
+    if(!TRACE.inv) return;
+    const r=TRACE.inv(x,y), s=snapRealToSelected(r.x, r.z);
+    if(s){ TRACE.spawn=s; drawTrace(); }
+}
+let TCAR=null;
+tcanvas.addEventListener('mousedown', e=>{
+    if(e.button!==0) return;
+    const [x,y]=canvasXY(e);
+    if(hitCar(x,y)){ TCAR={}; tcanvas.style.cursor='grabbing'; e.stopImmediatePropagation(); e.preventDefault(); }
+}, true);
+window.addEventListener('mousemove', e=>{ if(TCAR){ const [x,y]=canvasXY(e); moveCarTo(x, y+14); } });
+window.addEventListener('mouseup', ()=>{ if(TCAR){ TCAR=null; TRACE._justPanned=performance.now(); tcanvas.style.cursor='crosshair'; } });
+tcanvas.addEventListener('mousemove', e=>{ if(TCAR||TPAN) return; const [x,y]=canvasXY(e); tcanvas.style.cursor = hitCar(x,y) ? 'grab' : 'crosshair'; });
+
+// ── S46d: tunnels (painted per road chunk, built into data.tunnels with the existing tunnel model) ──
+function isTunnelAt(ci, x, z){
+    const t=TRACE.tunnels && TRACE.tunnels[TRACE.cand[ci].name]; if(!t) return false;
+    return !!t[chunkOfPoint(ci,x,z)];
+}
+function paintTunnelAt(cx, cy){
+    const ci=selectedRoadAt(cx,cy); if(ci<0) return false;
+    const rp=realPointOn(ci,cx,cy); if(!rp) return false;
+    const name=TRACE.cand[ci].name, k=chunkOfPoint(ci, rp.x, rp.z);
+    if(TRACE.paintTool==='__tunerase'){
+        const t=TRACE.tunnels[name]; if(!t || !t[k]) return false;
+        delete t[k]; if(!Object.keys(t).length) delete TRACE.tunnels[name]; return true;
+    }
+    if(!TRACE.tunnels[name]) TRACE.tunnels[name]={};
+    if(TRACE.tunnels[name][k]) return false;
+    TRACE.tunnels[name][k]=true; return true;
+}
+function buildTunnelList(scaled){
+    const out=[];
+    for(const i of TRACE.sel){
+        const c=TRACE.cand[i], tk=TRACE.tunnels[c.name], ring=scaled[c.name];
+        if(!tk || !ring) continue;
+        const {n,total}=chunksFor(i), ks=Object.keys(tk).map(Number).sort((a,b)=>a-b);
+        const runs=[]; let s=null, p=null;
+        for(const k of ks){ if(s===null){ s=p=k; } else if(k===p+1){ p=k; } else { runs.push([s,p]); s=p=k; } }
+        if(s!==null) runs.push([s,p]);
+        for(const [a,b] of runs){
+            const from=Math.max(0, Math.floor(a*total/n*SCALE/RESAMPLE)), to=Math.min(ring.length-1, Math.ceil((b+1)*total/n*SCALE/RESAMPLE));
+            if(to-from < 6) continue;
+            out.push({ road:c.name, from, to, height:10, mass:12, thick:7, name:'TUNNEL '+(out.length+1) });
+        }
+    }
+    return out;
 }
 
-function updateSpawnBtn(){
-    const btn=document.getElementById('trace-spawn');
-    if(!btn) return;
-    btn.classList.toggle('primary', TRACE.spawnMode);
-    btn.textContent = TRACE.spawnMode ? 'CLICK MAP' : (TRACE.spawn ? 'SPAWN \u2713' : 'SPAWN');
+// ── S46d: sea / land AREA fill (drag a box instead of dabbing one cell at a time) ──
+function seaFillRect(x0,y0,x1,y1,erase){
+    if(!TRACE.inv) return false;
+    const A=TRACE.inv(Math.min(x0,x1), Math.max(y0,y1)), B=TRACE.inv(Math.max(x0,x1), Math.min(y0,y1));   // screen y is flipped
+    const g=TRACE.seaGrid;
+    const gx0=Math.max(0,Math.floor((A.x-g.minx)/g.cell)), gx1=Math.min(g.nx-1,Math.floor((B.x-g.minx)/g.cell));
+    const gz0=Math.max(0,Math.floor((A.z-g.minz)/g.cell)), gz1=Math.min(g.nz-1,Math.floor((B.z-g.minz)/g.cell));
+    let changed=false;
+    for(let gx=gx0; gx<=gx1; gx++) for(let gz=gz0; gz<=gz1; gz++){
+        const key=gx+','+gz;
+        if(erase){ if(TRACE.sea.delete(key)) changed=true; }
+        else if(!TRACE.sea.has(key)){ TRACE.sea.add(key); changed=true; }
+    }
+    return changed;
 }
-document.getElementById('trace-spawn').addEventListener('click', ()=>{
-    TRACE.spawnMode=!TRACE.spawnMode;
-    tcanvas.style.cursor = TRACE.spawnMode ? 'cell' : 'crosshair';
-    updateSpawnBtn(); drawTrace();
+tcanvas.addEventListener('mousedown', e=>{
+    if(e.button!==0 || !TRACE.editMode || TPAN || TCAR) return;
+    const t=TRACE.paintTool; if(t!=='__sea' && t!=='__seaerase') return;
+    const [x,y]=canvasXY(e);
+    TRACE.seaDrag={ x0:x, y0:y, x1:x, y1:y, erase:(t==='__seaerase') };
+    e.stopImmediatePropagation();     // the per-cell brush below must not also fire
+}, true);
+window.addEventListener('mousemove', e=>{
+    if(!TRACE.seaDrag) return;
+    const [x,y]=canvasXY(e); TRACE.seaDrag.x1=x; TRACE.seaDrag.y1=y; drawTrace();
 });
+window.addEventListener('mouseup', ()=>{
+    const s=TRACE.seaDrag; if(!s) return;
+    TRACE.seaDrag=null;
+    seaFillRect(s.x0,s.y0,s.x1,s.y1,s.erase);
+    TRACE._justPanned=performance.now();
+    drawTrace();
+});
+
+// ── S46d: LOAD menu (LOCAL / WORLD) ──
+const loadMenuEl=document.getElementById('trace-loadmenu');
+document.getElementById('trace-load').addEventListener('click', e=>{ e.stopPropagation(); loadMenuEl.classList.toggle('open'); });
+document.addEventListener('click', ()=>loadMenuEl.classList.remove('open'));
+document.getElementById('trace-load-local').addEventListener('click', ()=>{
+    loadMenuEl.classList.remove('open');
+    loadFileInput.value='';   // allow re-picking the same file
+    loadFileInput.click();
+});
+document.getElementById('trace-load-world').addEventListener('click', async ()=>{
+    loadMenuEl.classList.remove('open');
+    const box=document.getElementById('world-pick'), list=document.getElementById('world-pick-list');
+    box.classList.add('on'); list.textContent='CONTACTING THE WORLD ...';
+    try {
+        if(!worldReady()) throw new Error('WORLD NOT SET UP YET');
+        const items=await worldList();
+        list.textContent='';
+        if(!items.length) list.textContent='NO MAPS IN THE WORLD YET';
+        for(const m of items){
+            const b=document.createElement('button'); b.className='tbtn'; b.style.textAlign='left'; b.textContent=m.name;
+            b.addEventListener('click', ()=>{ box.classList.remove('on'); worldLoadFile(m.file); });
+            list.appendChild(b);
+        }
+    } catch(err){ list.textContent=String(err&&err.message||err).toUpperCase(); }
+});
+document.getElementById('world-pick-close').addEventListener('click', ()=>document.getElementById('world-pick').classList.remove('on'));
+
+// ── S46d: LOAD BIGGER MAP ──
+function traceBiggerBtn(){
+    const b=document.getElementById('trace-bigger'); if(!b) return;
+    const max = BIG_STEP >= RADIUS_STEPS.length-1;
+    b.disabled = max; b.textContent = max ? 'BIGGEST MAP' : 'LOAD BIGGER MAP';
+}
+function captureTraceCarry(){
+    const T=TRACE, sel=[...T.sel].map(i=>T.cand[i]);
+    const baseName=n=>String(n).replace(/ \(\d+\)$/,'');
+    const paints=[];
+    for(const i of T.sel){
+        const c=T.cand[i], {n,total}=chunksFor(i);
+        const at=(k)=>{ let d=(k+0.5)*total/n, acc=0; for(const s of chunksFor(i).segs){ if(d<=acc+s.len || s===chunksFor(i).segs[chunksFor(i).segs.length-1]){ const t=s.len?Math.min(1,Math.max(0,(d-acc)/s.len)):0; return [s.a[0]+(s.b[0]-s.a[0])*t, s.a[1]+(s.b[1]-s.a[1])*t]; } acc+=s.len; } return c.chain[0]; };
+        for(const k in (T.zones[c.name]||{})){ const p=at(+k); paints.push({kind:'zone', zone:T.zones[c.name][k], base:baseName(c.name), x:p[0], z:p[1]}); }
+        for(const k in (T.tunnels[c.name]||{})){ const p=at(+k); paints.push({kind:'tunnel', base:baseName(c.name), x:p[0], z:p[1]}); }
+    }
+    return {
+        roads: sel.map(c=>({ base:baseName(c.name), pts:[0.2,0.5,0.8].map(f=>c.chain[Math.floor((c.chain.length-1)*f)]) })),
+        spawn: T.spawn ? {x:T.spawn.x, z:T.spawn.z} : null,
+        churches: (T.churches||[]).map(c=>({x:c.x,z:c.z})),
+        paints, sea:new Set(T.sea), seaGrid:Object.assign({}, T.seaGrid), page:T.page,
+    };
+}
+function distPtToChain(x,z,chain){
+    let best=1e18;
+    for(let i=1;i<chain.length;i++){
+        const a=chain[i-1], b=chain[i], dx=b[0]-a[0], dz=b[1]-a[1], L2=dx*dx+dz*dz||1;
+        let t=((x-a[0])*dx+(z-a[1])*dz)/L2; t=Math.max(0,Math.min(1,t));
+        const d=Math.hypot(x-(a[0]+t*dx), z-(a[1]+t*dz)); if(d<best) best=d;
+    }
+    return best;
+}
+function restoreTraceCarry(C){
+    const T=TRACE, baseName=n=>String(n).replace(/ \(\d+\)$/,'');
+    for(const old of C.roads){
+        for(let i=0;i<T.cand.length;i++){
+            const c=T.cand[i]; if(baseName(c.name)!==old.base) continue;
+            let hit=0; for(const p of old.pts) if(distPtToChain(p[0],p[1],c.chain)<8) hit++;
+            if(hit>=2){ T.sel.add(i); break; }
+        }
+    }
+    const nearestSel=(base,x,z)=>{ let best=-1,bd=12; for(const i of T.sel){ const c=T.cand[i]; if(baseName(c.name)!==base) continue; const d=distPtToChain(x,z,c.chain); if(d<bd){bd=d;best=i;} } return best; };
+    for(const p of C.paints){
+        const i=nearestSel(p.base,p.x,p.z); if(i<0) continue;
+        const name=T.cand[i].name, k=chunkOfPoint(i,p.x,p.z);
+        if(p.kind==='zone'){ (T.zones[name]=T.zones[name]||{})[k]=p.zone; }
+        else { (T.tunnels[name]=T.tunnels[name]||{})[k]=true; }
+    }
+    T.churches=C.churches; T.spawn=C.spawn;
+    const og=C.seaGrid, g=T.seaGrid;                       // same 50 m cells, new origin: re-map by cell centre
+    for(let gx=0; gx<g.nx; gx++) for(let gz=0; gz<g.nz; gz++){
+        const cx=g.minx+(gx+0.5)*g.cell, cz=g.minz+(gz+0.5)*g.cell;
+        const ox=Math.floor((cx-og.minx)/og.cell), oz=Math.floor((cz-og.minz)/og.cell);
+        if(ox>=0&&oz>=0&&ox<og.nx&&oz<og.nz&&C.sea.has(ox+','+oz)) T.sea.add(gx+','+gz);
+    }
+    buildAutoZoneClassifier(); updateTraceCount(); drawTrace(); traceBiggerBtn();
+}
+document.getElementById('trace-bigger').addEventListener('click', async ()=>{
+    if(BIG_STEP >= RADIUS_STEPS.length-1) return;
+    const b=document.getElementById('trace-bigger');
+    b.disabled=true; b.textContent='LOADING...';
+    const carry=captureTraceCarry(), place=TRACE.place, lat0=TRACE.lat0, lon0=TRACE.lon0;
+    BIG_STEP++; RADIUS=RADIUS_STEPS[BIG_STEP];
+    await startBuild({ place, lat0, lon0, carry });
+    traceBiggerBtn();
+});
+
 document.getElementById('trace-next').addEventListener('click', ()=>setTracePage('scenery'));
 document.getElementById('trace-roads').addEventListener('click', ()=>setTracePage('roads'));
-document.getElementById('trace-none').addEventListener('click', ()=>{
-    TRACE.sel.clear(); TRACE.spawn=null; TRACE.zones={}; TRACE.churches=[];
-    if(TRACE.sea) TRACE.sea.clear();
-    buildAutoZoneClassifier(); updateTraceCount(); updateSpawnBtn(); drawTrace();
-});
 document.getElementById('trace-back').addEventListener('click', ()=>{
     traceEl.style.display='none';
     menuEl.style.display='flex'; statusEl.style.display='block';   // see note in #back handler
     csStartIntro();
 });
 document.getElementById('trace-build').addEventListener('click', ()=>{ ZXLOAD.prime(); buildFromSelection(); });
-document.getElementById('trace-load').addEventListener('click', ()=>{
-    // LOAD BUILD — open the file picker for a previously exported JSON build.
-    // Loaded verbatim: the file is authoritative (see loadSnapshot).
-    loadFileInput.value='';   // allow re-picking the same file
-    loadFileInput.click();
-});
 
 async function buildFromSelection(){
     const chosen = [...TRACE.sel].map(i=>TRACE.cand[i]);
@@ -8090,6 +8334,7 @@ async function buildFromSelection(){
         ),
         houses: [], park: [],
     };
+    data.tunnels = buildTunnelList(scaled);                       // S46d: painted tunnels -> the existing tunnel model
     // If a spawn was placed on the road screen, convert it from real metres to
     // world units (same recentre+scale as the roads) so the car starts there.
     if(TRACE.spawn){
@@ -8103,6 +8348,7 @@ async function buildFromSelection(){
         sceneryZones: JSON.parse(JSON.stringify(TRACE.zones||{})),   // painted overrides
         churches: (TRACE.churches||[]).map(c=>({x:c.x,z:c.z})),      // stamped accents
         seaCells: [...(TRACE.sea||[])],                              // painted sea cell keys
+        tunnels: data.tunnels,
         rawFootprints: TRACE_FOOTPRINTS.map(f=>({ tags:f.tags, tpl:f.tpl.name, poly:f.poly })),
         buildingFormat: '[bx, bz, yawDeg, roofH, type, baseY, halfW, halfD] (world units)',
     };
@@ -10483,15 +10729,14 @@ const OPT_MAIN = [
     { label:'SATURDAY NIGHT', value:()=>(SNM.active?'ON':'OFF'),
       act:()=>{ optsClose(); if(SNM.active) snmQuit(); else snmStart(); } },
     { label:'GRAPHICS',  value:()=>gfxName(),
-      left:()=>cycleGfx(-1), right:()=>cycleGfx(1) },
+      left:()=>cycleGfx(-1), right:()=>cycleGfx(1),
+      act:()=>{ OPTS.page='gfx'; OPTS.sel = GFX_AUTO ? 0 : GFX_LEVEL + 1; optsPaint(); } },
     { label:'BUILDINGS', value:()=>Math.round(BUILD_DENSITY*100)+'%',
       left:()=>stepDensity(-1), right:()=>stepDensity(1) },
     { label:'BACK TO MAP',  act:()=>{ optsClose(); $('back-map').click(); } },
     { label:'CITY SELECT',  act:()=>{ optsClose(); $('back').click(); } },
-    { label:'SAVE LOCAL',   act:()=>{ exportBuildData(); } },
-    { label:'LOAD LOCAL',   act:()=>{ loadFileInput.value=''; loadFileInput.click(); } },
-    { label:'SAVE TO WORLD', act:()=>{ worldSaveInput.value=''; worldSaveInput.click(); } },
-    { label:'LOAD FROM WORLD', act:()=>{ worldOpen(); } },
+    { label:'LOAD',         act:()=>{ OPTS.page='load'; OPTS.sel=0; optsPaint(); } },
+    { label:'SAVE',         act:()=>{ OPTS.page='save'; OPTS.sel=0; optsPaint(); } },
     { label:'ADVANCED',    act:()=>{ OPTS.page='adv'; OPTS.sel=0; optsPaint(); } },
     { label:'RESUME',      act:()=>optsClose() },
 ];
@@ -10538,6 +10783,28 @@ function optsWorldItems(){
     return items;
 }
 
+// S46d: GRAPHICS is now a real list (pick AUTO or a fixed level); LOAD / SAVE open their own short lists.
+function setGfx(p){                 // 0 = AUTO, 1..5 = ULTRA..FASTEST
+    GFX_AUTO = (p === 0); GFX_LEVEL = GFX_AUTO ? 2 : p - 1;
+    GOV.ema = 0; GOV.n = 0; applyGfx();
+}
+function optsGfxItems(){
+    const items = [{ label:'AUTO', value:()=>(GFX_AUTO?'ON':''), act:()=>{ setGfx(0); OPTS.page='main'; OPTS.sel=1; optsPaint(); } }];
+    GFX_MODES.forEach((m,i)=> items.push({ label:m.name, value:()=>((!GFX_AUTO && GFX_LEVEL===i)?'ON':''),
+        act:()=>{ setGfx(i+1); OPTS.page='main'; OPTS.sel=1; optsPaint(); } }));
+    items.push({ label:'BACK', act:()=>{ OPTS.page='main'; OPTS.sel=1; optsPaint(); } });
+    return items;
+}
+const OPT_LOAD = [
+    { label:'LOAD LOCAL',  act:()=>{ loadFileInput.value=''; loadFileInput.click(); } },
+    { label:'LOAD WORLD',  act:()=>{ worldOpen(); } },
+    { label:'BACK',        act:()=>{ OPTS.page='main'; OPTS.sel=5; optsPaint(); } },
+];
+const OPT_SAVE = [
+    { label:'SAVE LOCAL',  act:()=>{ exportBuildData(); } },
+    { label:'SAVE WORLD',  act:()=>{ worldSaveInput.value=''; worldSaveInput.click(); } },
+    { label:'BACK',        act:()=>{ OPTS.page='main'; OPTS.sel=6; optsPaint(); } },
+];
 const OPT_ADV = [
     { label:'HILLS', value:()=>((GROUND_HAS_ELEV && ELEV_EXAG > 0) ? '\u00d7'+(+ELEV_EXAG.toFixed(2)) : 'FLAT'),
       left:()=>retuneElevation(1/1.25), right:()=>retuneElevation(1.25) },
@@ -10592,6 +10859,9 @@ function optsPage(){
     if(OPTS.page==='input') return optsInputItems();
     if(OPTS.page==='keys')  return OPT_KEYS;
     if(OPTS.page==='world') return optsWorldItems();
+    if(OPTS.page==='gfx')   return optsGfxItems();
+    if(OPTS.page==='load')  return OPT_LOAD;
+    if(OPTS.page==='save')  return OPT_SAVE;
     return OPT_MAIN;
 }
 
@@ -10640,7 +10910,8 @@ function optsPaint(){
     const items = optsPage();
     const title = OPTS.page==='adv' ? 'ADVANCED OPTIONS'
                 : OPTS.page==='input' ? 'INPUTS'
-                : OPTS.page==='world' ? 'LOAD FROM WORLD' : 'OPTIONS';
+                : OPTS.page==='world' ? 'LOAD WORLD'
+                : OPTS.page==='gfx' ? 'GRAPHICS' : OPTS.page==='load' ? 'LOAD' : OPTS.page==='save' ? 'SAVE' : 'OPTIONS';
     zxCentre(octx, title, 2, OP_BLACK, OP_GREEN);
 
     // LOAD FROM WORLD: a status line above the (dynamic) map rows.
@@ -10767,7 +11038,8 @@ document.addEventListener('keydown', e=>{
     else if(k==='enter' || k===' ')     optsActivate();
     else if(k==='escape'){
         if(OPTS.page==='input' || OPTS.page==='keys'){ OPTS.page='adv';  OPTS.sel=0; optsPaint(); }
-        else if(OPTS.page==='adv' || OPTS.page==='world')  { OPTS.page='main'; OPTS.sel=0; optsPaint(); }
+        else if(OPTS.page==='world') { OPTS.page='load'; OPTS.sel=1; optsPaint(); }
+        else if(OPTS.page==='adv' || OPTS.page==='gfx' || OPTS.page==='load' || OPTS.page==='save')  { OPTS.page='main'; OPTS.sel=0; optsPaint(); }
         else optsClose();
     }
 }, true);
