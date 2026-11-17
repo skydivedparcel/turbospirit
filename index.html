@@ -6583,7 +6583,7 @@ function exportBuildData(){
 // geometry. To restore the original-build behaviour, pick a city again.
 
 function loadSnapshot(snap){
-    LEARN = null; LEARN_MAP = null;   // S47g: any map load ends a lesson (learnerGo / loadEmbeddedMap set them again after)
+    LEARN = null;   // S47g: any map load ends the lessons (a new Cruise starts them again)
     snmQuit(true);                       // a new map ends any Saturday Night run
     if(!snap || snap.format!=='tedrive-build-snapshot'){
         alert('Not a valid build snapshot file.'); return;
@@ -6726,6 +6726,7 @@ loadFileInput.addEventListener('change', e=>{
         try {
             const snap = JSON.parse(reader.result);
             loadSnapshot(snap);
+            learnerStart();   // S47g: straight into Cruise, so lessons
         } catch(err){
             console.error('[load] failed:', err);
             alert('Could not read that file as a build snapshot. See console.');
@@ -6764,7 +6765,6 @@ async function loadEmbeddedMap(key){
         ZXLOAD.start();                              // the tape stripes while it unpacks
         const snap = await embeddedSnapshot(key);
         loadSnapshot(snap);                          // stops the stripes and shows the game
-        LEARN_MAP = key;                             // S47g: learner mode needs World Circuits
         modeShow(true);                              // S28: no road screen, straight to SELECT GAME MODE
     } catch(err){
         console.error('[embed] '+key+' failed, building live instead:', err);
@@ -6829,6 +6829,7 @@ async function worldLoadFile(file){
         const url = WORLD_PUBLIC.replace(/\/$/,'') + '/' + encodeURIComponent(file);
         const snap = await fetchJSON(url, { headers:{'Accept':'application/json'} });
         loadSnapshot(snap);        // switches to the game screen on success
+        learnerStart();            // S47g: straight into Cruise, so lessons
     } catch(err){
         worldDone();
         console.error('[world load] failed:', err);
@@ -8208,7 +8209,7 @@ function ctrlPaint(){
 // 1 = CRUISE MODE (free drive), 2 = SATURDAY NIGHT MODE (snmStart -> briefing).
 // Esc / pad B goes back to the road screen.
 const MD_YELLOW = '#C0C000', MD_BLACK = '#000000';
-const MODE_LIST = ['CRUISE MODE', 'SATURDAY NIGHT MODE', 'LEARNER MODE'];   // S47g: 3 = learner
+const MODE_LIST = ['CRUISE MODE', 'SATURDAY NIGHT MODE'];
 let MODE = { open:false, padSel:null, shownAt:0 };
 
 function modePaint(){
@@ -8216,14 +8217,13 @@ function modePaint(){
     zxCentre(sctx, 'SELECT GAME MODE', ROW_HEAD, MD_BLACK, MD_YELLOW);
     MODE_LIST.forEach((label, i)=>{
         const r = ROW_FIRST + i*ROW_GAP;
-        const hi = MODE.padSel===i, off = i===2 && !learnerAvailable();   // S47g: learner greyed off World Circuits
-        const ink = hi ? MD_YELLOW : (off ? LEARN_GREY : MD_BLACK), pap = hi ? MD_BLACK : MD_YELLOW;
+        const hi = MODE.padSel===i;
+        const ink = hi ? MD_YELLOW : MD_BLACK, pap = hi ? MD_BLACK : MD_YELLOW;
         if(hi){ sctx.fillStyle=MD_BLACK; sctx.fillRect((COL_NUM-1)*8, r*8, (COL_NAME+21-(COL_NUM-1))*8, 8); }
         zxText(sctx, (i+1)+'.', COL_NUM,  r, ink, pap);
         zxText(sctx, label,     COL_NAME, r, ink, pap);
     });
-    if(!learnerAvailable()) zxCentre(sctx, 'AVAILABLE ON WORLD CIRCUITS', ROW_FIRST + 3*ROW_GAP, LEARN_GREY, MD_YELLOW);   // S47g
-    zxCentre(sctx, MODE.padSel!==null ? 'UP/DOWN THEN A' : (learnerAvailable() ? 'ENTER 1, 2 OR 3' : 'ENTER 1 OR 2'),
+    zxCentre(sctx, MODE.padSel!==null ? 'UP/DOWN THEN A' : 'ENTER 1 OR 2',
              ROW_ENTER, MD_BLACK, MD_YELLOW);
 }
 // fromEmbed: the map came from a built-in snapshot (Harlow, Chadwell Heath, Essex Forest), so
@@ -8237,13 +8237,11 @@ function modeShow(fromEmbed){
 }
 function modePick(n){
     if(!MODE.open || performance.now() - MODE.shownAt < 250) return;
-    if(n===3 && !learnerAvailable()) return;   // S47g: greyed out off World Circuits
     MODE.open = false;
     stepsEl.style.display = 'none';
-    if(n===3){ CTRL_MODE = 1; stepsShow(learnerGo, learnerInfoPaint); return; }   // S47g: learner info, then Silverstone
     // S28: the CONTROLS screen, then the drive (Saturday Night: then its briefing)
     CTRL_MODE = n;
-    stepsShow(()=>{ showGame(); if(n===2) snmStart(); }, ctrlPaint);
+    stepsShow(()=>{ showGame(); if(n===2) snmStart(); else learnerStart(); }, ctrlPaint);   // S47g: cruise = lessons first
 }
 function modeBack(){
     if(!MODE.open) return;
@@ -8261,131 +8259,96 @@ function modeClick(e){
 document.addEventListener('keydown', e=>{
     if(!MODE.open) return;
     e.preventDefault(); e.stopImmediatePropagation();
-    if(e.key==='1' || e.key==='2' || e.key==='3') modePick(+e.key);
+    if(e.key==='1' || e.key==='2') modePick(+e.key);
     else if(e.key==='Escape') modeBack();
 }, true);
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  S47g: LEARNER MODE (SELECT GAME MODE option 3)
-//  A short driving lesson on the Silverstone GP track (World Circuits map),
-//  on the grid 12 wu behind the start line on the National Pit Straight.
-//  Three lessons, each ends once the player has done it:
+//  S47g: LEARNER TIPS at the start of every CRUISE MODE drive (any map:
+//  the built-in cities, World Circuits, and Cruise Anywhere maps built live or
+//  loaded from a file / the World). Lessons, each ends once the player has done it:
 //    1. STEERING  - left and right (lane change), with the throttle
-//    2. HANDBRAKE - hold it while steering for tighter, quicker turns
+//    2. HANDBRAKE - tap it (sharper), then hold it (hard); cued at bends
 //    3. TURBO     - at top speed, hold turbo; then a page on the meter
 //  Tips are drawn over the top of the play window after each frame, in the
-//  same style as the old site demo's TRY THE HANDBRAKE / TRY THE TURBO hints
-//  (pad corner with the button to press blinking, key in brackets).
-//  LEARN is a var (not const) so render()/update() can test it at any time.
+//  same style as the old site demo's TRY THE HANDBRAKE / TRY THE TURBO hints.
+//  Bends are found on the fly from the loaded road network (RING), so it works
+//  on any map. LEARN is a var so render()/update() can test it at any time.
 // ═══════════════════════════════════════════════════════════════════════════
 var LEARN = null;
-var LEARN_MAP = null;          // embed key of the map now loaded (set by loadEmbeddedMap); learner needs 'worldcircuits'
-const LEARN_GREY = '#808080';
-function learnerAvailable(){ return LEARN_MAP === 'worldcircuits'; }
 const LEARN_TUNE = { tryFrames: 30, steerFrames: 10, steerMin: 0.3, moveMin: 0.3,
                      passFrames: 30, meterFrames: 120, doneFrames: 80,      // 20 Hz frames
                      taps: 2, tapMax: 10,                                   // handbrake taps: press + release within 0.5 s, while steering
-                     bendTurn: 28, bendWin: 30, bendLead: 80 };             // bend = >28 deg over +-30 wu; cue from 80 wu before
-const LEARN_INFO = [
-    'LEARN THE CONTROLS',
-    'AT SILVERSTONE.',
-    '',
-    '1. STEERING',
-    '2. HANDBRAKE',
-    '3. TURBO',
-];
-function learnerInfoPaint(){
-    sctx.fillStyle = MD_YELLOW; sctx.fillRect(0, 0, 256, 192);
-    zxCentre(sctx, 'LEARNER MODE', 2, MD_BLACK, MD_YELLOW);
-    LEARN_INFO.forEach((l, i)=>{ if(l) zxCentre(sctx, l, 5 + i, MD_BLACK, MD_YELLOW); });
-    if(STEPS.blink < 20) zxCentre(sctx, PAD_USED ? 'PRESS A' : 'PRESS ANY KEY', 22, MD_BLACK, MD_YELLOW);
+                     bendTurn: 45, bendAhead: 130, bendIn: 25, bendHops: 4 }; // bend = road heading turns >45 deg within 130 wu ahead (or across +-25 wu)
+function learnerStart(){                                         // called as a Cruise drive starts
+    LEARN = { active:true, step:0, t:0, left:0, right:0, taps:0, hbDown:0, hbSteer:false, hb:0, tb:0, hold:0, pass:0, bend:false };
 }
 
-// Put the car on the Silverstone grid: the start line sits LAP_CIRCUITS' `at`
-// (0.284) along the National Pit Straight; the car goes 12 wu behind it facing
-// the lap direction, the camera 13 wu behind and 6.62 up (as the S47f spawns).
-function learnerSilverstone(snap){
-    const road = (snap.ribbon || []).find(r => r.name === 'National Pit Straight');
-    if(!road || !road.sections || road.sections.length < 2) return false;
-    const sec = road.sections, AT = 0.284, BACK = 12, CAM_BACK = 13, CAM_UP = 6.62;
-    let tot = 0;
-    for(let k = 1; k < sec.length; k++) tot += Math.hypot(sec[k].cx - sec[k-1].cx, sec[k].cz - sec[k-1].cz);
-    let want = tot * AT, k = 1;
-    while(k < sec.length - 1){
-        const d = Math.hypot(sec[k].cx - sec[k-1].cx, sec[k].cz - sec[k-1].cz);
-        if(want <= d) break;
-        want -= d; k++;
-    }
-    const p = sec[k-1], q = sec[k], d = Math.hypot(q.cx - p.cx, q.cz - p.cz) || 1, f = Math.min(1, want / d);
-    const gx = p.cx + (q.cx - p.cx) * f, gz = p.cz + (q.cz - p.cz) * f, gy = (p.cy || 0) + ((q.cy || 0) - (p.cy || 0)) * f;
-    const fx = (q.cx - p.cx) / d, fz = (q.cz - p.cz) / d;
-    const yaw = ((Math.atan2(fx, fz) * 180 / Math.PI) % 360 + 360) % 360, yr = yaw * Math.PI / 180;
-    const x = gx - fx * BACK, z = gz - fz * BACK;
-    snap.map = snap.map || {};
-    snap.map.finishLine = { x: gx, z: gz, yaw };
-    snap.map.racers = 0;
-    snap.car = { x, z, y: gy, yaw, startX: x, startZ: z, startYaw: yaw };
-    snap.camera = { x: x - Math.sin(yr) * CAM_BACK, y: gy + CAM_UP, z: z - Math.cos(yr) * CAM_BACK, yaw, pitch: 0 };
-    return true;
+// ── bends ahead, on any map ─────────────────────────────────────────────────
+// Find the road section nearest the car, take the way along it the car is
+// facing, and walk ahead along that road; at its end carry on into the road
+// whose end touches it and runs straightest on (Silverstone, for one, is a chain
+// of short named roads). A bend = the road's heading turns more than bendTurn
+// degrees within bendAhead wu, or across +-bendIn wu around the car (in it).
+function learnerRoadEnds(){
+    if(LEARN._endsFor === RING.roads) return LEARN._ends;
+    const ends = [];
+    for(const rd of RING.roads){ const r = rd.ring; if(!r || r.length < 2) continue;
+        ends.push({ rd, i: 0, dir: 1, x: r[0].cx, z: r[0].cz });
+        ends.push({ rd, i: r.length - 1, dir: -1, x: r[r.length-1].cx, z: r[r.length-1].cz }); }
+    LEARN._endsFor = RING.roads; LEARN._ends = ends;
+    return ends;
 }
-
-async function learnerGo(){
-    try {
-        ZXLOAD.start();
-        const snap = await embeddedSnapshot('worldcircuits');
-        if(!learnerSilverstone(snap)) console.warn('[learner] National Pit Straight not found; using the map spawn');
-        loadSnapshot(snap);                          // clears LEARN, shows the game
-        LEARN_MAP = 'worldcircuits';
-        LEARN = { active:true, step:0, t:0, left:0, right:0, taps:0, hbDown:0, hbSteer:false, hb:0, tb:0, hold:0, pass:0, bend:false };
-        try { learnerBends(); } catch(e){ console.warn('[learner] no bend cues', e); }
-    } catch(err){
-        console.error('[learner] could not load World Circuits:', err);
-        ZXLOAD.stop(); LEARN = null; showGame();
-    }
-}
-
-// The Silverstone lap as one path (LAP_CIRCUITS order), and its bends as
-// [from, to] path distances: where the heading turns more than bendTurn degrees
-// across +-bendWin wu. The handbrake lesson cues from bendLead wu before each.
-function learnerBends(){
-    const T = LEARN_TUNE, C = LAP_CIRCUITS.find(c => c.name === 'SILVERSTONE'); if(!C) return;
-    const P = [];
-    for(const [name, dir] of C.roads){
-        const rd = RING.roads.find(r => r.name === name); if(!rd || !rd.ring) return;
-        const ring = dir < 0 ? rd.ring.slice().reverse() : rd.ring;
-        for(const q of ring) P.push([q.cx, q.cz]);
-    }
-    const cum = [0];
-    for(let i = 1; i < P.length; i++) cum.push(cum[i-1] + Math.hypot(P[i][0]-P[i-1][0], P[i][1]-P[i-1][1]));
-    const L = cum[cum.length-1];
-    let j = 1;
-    const at = d => { d = ((d % L) + L) % L; let i = 1; while(i < P.length-1 && cum[i] < d) i++;
-        const f = (d - cum[i-1]) / Math.max(1e-6, cum[i] - cum[i-1]); return [P[i-1][0] + (P[i][0]-P[i-1][0])*f, P[i-1][1] + (P[i][1]-P[i-1][1])*f]; };
-    const hd = d => { const a = at(d-4), b = at(d+4); return Math.atan2(b[0]-a[0], b[1]-a[1]) * 180 / Math.PI; };
-    const bends = []; let run = null;
-    for(let d = 0; d < L; d += 5){
-        const t = Math.abs(((hd(d + T.bendWin) - hd(d - T.bendWin)) % 360 + 540) % 360 - 180);
-        if(t > T.bendTurn){ if(!run) run = [d, d]; else run[1] = d; }
-        else if(run){ bends.push(run); run = null; }
-    }
-    if(run) bends.push(run);
-    LEARN.path = { P, cum, L, bends, i: 0 };
-}
-// Is the car on (or just before) a bend, going the lap way round?
 function learnerNearBend(){
-    const L = LEARN, W = L && L.path; if(!W || !W.bends.length) return false;
-    if(L.t % 4 === 0){                                           // nearest path point, every 4th frame
-        let best = 1e18, bi = W.i;
-        for(let i = 0; i < W.P.length; i++){ const d = (W.P[i][0]-CAR.x)**2 + (W.P[i][1]-CAR.z)**2; if(d < best){ best = d; bi = i; } }
-        W.i = bi; W.off = Math.sqrt(best);
+    const L = LEARN, T = LEARN_TUNE;
+    if(!L || typeof RING === 'undefined' || !RING.roads || !RING.roads.length) return false;
+    if(L.t % 4 !== 0 && L._bendT !== undefined) return L._bend;      // re-check 5 times a second
+    L._bendT = L.t;
+    let best = null, bd = 1e18;
+    for(const rd of RING.roads){ const r = rd.ring; if(!r) continue;
+        for(let i = 0; i < r.length; i++){ const d = (r[i].cx - CAR.x) ** 2 + (r[i].cz - CAR.z) ** 2; if(d < bd){ bd = d; best = { rd, i }; } } }
+    if(!best || bd > 40 * 40 || best.rd.ring.length < 2) return (L._bend = false);
+    const yr = CAR.yaw * Math.PI / 180, fx = Math.sin(yr), fz = Math.cos(yr);
+    const hdg = (a, b) => Math.atan2(b.cx - a.cx, b.cz - a.cz) * 180 / Math.PI;
+    const diff = (a, b) => Math.abs(((a - b) % 360 + 540) % 360 - 180);
+    const r0 = best.rd.ring, i0 = Math.min(best.i, r0.length - 2);
+    const dir = ((r0[i0+1].cx - r0[i0].cx) * fx + (r0[i0+1].cz - r0[i0].cz) * fz) >= 0 ? 1 : -1;
+    // walk a road both ways from the car: list of [distance, heading] samples
+    const samples = [];                                         // [signed distance from the car, heading]
+    const follow = (sign) => {
+        let rd = best.rd, r = rd.ring, i = best.i, step = dir * sign, dist = 0, hops = 0;
+        const max = sign > 0 ? T.bendAhead : T.bendIn;
+        while(dist < max){
+            const j = i + step;
+            if(j < 0 || j >= r.length){                         // end of this road: carry on into the next
+                if(sign < 0 || hops >= T.bendHops) break;
+                const p = r[i], hIn = hdg(r[i - step], p);
+                let nxt = null, nd = 1e18;
+                for(const e of learnerRoadEnds()){
+                    if(e.rd === rd) continue;
+                    const dd = (e.x - p.cx) ** 2 + (e.z - p.cz) ** 2; if(dd > 16) continue;
+                    const er = e.rd.ring, k = e.i + e.dir; if(k < 0 || k >= er.length) continue;
+                    const turn = diff(hdg(er[e.i], er[k]), hIn); if(turn < nd){ nd = turn; nxt = e; }
+                }
+                if(!nxt) break;
+                rd = nxt.rd; r = rd.ring; i = nxt.i; step = nxt.dir; hops++;
+                continue;
+            }
+            dist += Math.hypot(r[j].cx - r[i].cx, r[j].cz - r[i].cz);
+            samples.push([sign * dist, sign > 0 ? hdg(r[i], r[j]) : hdg(r[j], r[i])]);
+            i = j;
+        }
+    };
+    follow(1); follow(-1);
+    if(!samples.length) return (L._bend = false);
+    const here = hdg(r0[i0], r0[i0+1]) + (dir < 0 ? 180 : 0);
+    const ahead = samples.filter(s => s[0] > 0), behind = samples.filter(s => s[0] < 0);
+    let bend = ahead.some(s => diff(s[1], here) > T.bendTurn);
+    if(!bend && behind.length && ahead.length){                 // in the bend itself
+        const a = ahead.filter(s => s[0] <= T.bendIn), b = behind[behind.length - 1];
+        if(a.length && diff(a[a.length - 1][1], b[1]) > T.bendTurn) bend = true;
     }
-    if(W.off > 40) return false;
-    const i = Math.min(W.P.length-2, W.i), dx = W.P[i+1][0]-W.P[i][0], dz = W.P[i+1][1]-W.P[i][1];
-    const yr = CAR.yaw * Math.PI / 180;
-    if(dx * Math.sin(yr) + dz * Math.cos(yr) <= 0) return false;  // wrong way round
-    const d = W.cum[i];
-    return W.bends.some(([a, b]) => { const from = a - LEARN_TUNE.bendLead;
-        return (d >= from && d <= b) || (from < 0 && d >= W.L + from); });
+    return (L._bend = bend);
 }
 
 function learnerNext(){
@@ -12902,7 +12865,7 @@ function optsPadPoll(){
         if(MODE.open){
             const mUp = btn(12) || ay < -0.5, mDown = btn(13) || ay > 0.5;
             if((mUp && !PAD_CITY.up) || (mDown && !PAD_CITY.down)){
-                MODE.padSel = MODE.padSel===null ? 0 : (MODE.padSel+1) % (learnerAvailable() ? MODE_LIST.length : 2);   // S47g: skip a greyed learner row
+                MODE.padSel = MODE.padSel===null ? 0 : (MODE.padSel+1) % MODE_LIST.length;
                 modePaint();
             } else if(btn(0) && !PAD_CITY.a){
                 if(MODE.padSel===null){ MODE.padSel=0; modePaint(); }
