@@ -6933,85 +6933,89 @@ function unproject(x, z, lat0, lon0){
 // fetchJSON. Returns heights aligned to `locs`, or null if every service fails
 // (the caller then builds flat). Each provider has its own request shape and
 // response parser.
-async function fetchElevations(locs){
-    // When served by the bundled launcher (http://, not file://), a same-origin
-    // /elevation proxy is available — it forwards to OpenTopoData server-side, so
-    // there is no CORS wall at all. We try it first; it only exists over http.
+async function fetchElevations(locs, onProgress){
+    // S47n: batches of ELEV_BATCH run ELEV_WORKERS at a time. Each service keeps its own minimum
+    // gap between request starts (open-meteo 250 ms; OpenTopoData's public API allows 1 a second).
+    // A batch tries the preferred service 3 times, then the next ones; a service that fails a
+    // batch is skipped for the batches after it. Batches already fetched are always kept.
     const viaProxy = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);   // local launcher only; hosted builds skip it
-    // provider: builds a fetch for one batch and parses heights out of the result
+    const T_MS = 12000;
     const providers = [
         ...(viaProxy ? [{
-            name:'local-proxy',
+            name:'local-proxy', gap:0,
             run: async (batch)=>{
                 const locParam = batch.map(([la,lo])=>la.toFixed(6)+','+lo.toFixed(6)).join('|');
-                const data = await fetchJSON('/elevation?locations='+encodeURIComponent(locParam), { headers:{'Accept':'application/json'} });
+                const data = await fetchJSON('/elevation?locations='+encodeURIComponent(locParam), { headers:{'Accept':'application/json'}, timeoutMs:T_MS });
                 if(!data || !data.results || data.results.length!==batch.length) return null;
                 return data.results.map(r=> r.elevation==null ? 0 : r.elevation);
             }
         }] : []),
-        { // S28: Open-Meteo (Copernicus GLO-90) — GET, keyless, up to 100 points per
-          // call, and it allows calls from a web page (CORS), so it works when the
-          // game is hosted and the local /elevation proxy isn't there.
+        { // Open-Meteo (Copernicus GLO-90): GET, keyless, up to 100 points a call, CORS-friendly
             name:'open-meteo', gap:250,
             run: async (batch)=>{
                 const lat = batch.map(([la])=>la.toFixed(5)).join(',');
                 const lon = batch.map(([,lo])=>lo.toFixed(5)).join(',');
                 const data = await fetchJSON('https://api.open-meteo.com/v1/elevation?latitude='+lat+'&longitude='+lon,
-                                             { headers:{'Accept':'application/json'} });
+                                             { headers:{'Accept':'application/json'}, timeoutMs:T_MS });
                 if(!data || !Array.isArray(data.elevation) || data.elevation.length!==batch.length) return null;
                 return data.elevation.map(h=> (h==null || !isFinite(h)) ? 0 : h);
             }
         },
-        { // OpenTopoData (SRTM 30 m) — GET, lat,lon|lat,lon, cap 100/call.
-          // The public API allows 1 call per second: pace batches 1.1 s apart
-          // (they were 0.25 s, so batch 2 was refused and the build went flat).
+        { // OpenTopoData (SRTM 30 m): 1 call per second on the public API
             name:'opentopodata', gap:1100,
             run: async (batch)=>{
                 const locParam = batch.map(([la,lo])=>la.toFixed(6)+','+lo.toFixed(6)).join('|');
-                const url = 'https://api.opentopodata.org/v1/srtm30m?locations='+encodeURIComponent(locParam);
-                const data = await fetchJSON(url, { headers:{'Accept':'application/json'} });
+                const data = await fetchJSON('https://api.opentopodata.org/v1/srtm30m?locations='+encodeURIComponent(locParam),
+                                             { headers:{'Accept':'application/json'}, timeoutMs:T_MS });
                 if(!data || !data.results || data.results.length!==batch.length) return null;
                 return data.results.map(r=> r.elevation==null ? 0 : r.elevation);
             }
         },
-        { // Open-Elevation — POST JSON
-            name:'open-elevation',
+        { // Open-Elevation: POST JSON
+            name:'open-elevation', gap:500,
             run: async (batch)=>{
                 const body = JSON.stringify({ locations: batch.map(([la,lo])=>({latitude:la, longitude:lo})) });
                 const data = await fetchJSON('https://api.open-elevation.com/api/v1/lookup', {
-                    method:'POST',
-                    headers:{ 'Content-Type':'application/json', 'Accept':'application/json' },
-                    body,
-                });
+                    method:'POST', headers:{ 'Content-Type':'application/json', 'Accept':'application/json' }, body, timeoutMs:T_MS });
                 if(!data || !data.results || data.results.length!==batch.length) return null;
                 return data.results.map(r=> r.elevation==null ? 0 : r.elevation);
             }
         },
     ];
-
-    // pick the first provider that successfully returns the FIRST batch, then use
-    // it for the rest (so we don't keep retrying a dead service per batch).
-    for(const prov of providers){
-        const out = [];
-        let ok = true;
-        for(let i=0;i<locs.length;i+=ELEV_BATCH){
-            const batch = locs.slice(i, i+ELEV_BATCH);
-            let res = null;
-            // S46d: up to 3 tries per batch, INCLUDING the first (one transient 429/timeout on batch 1
-            // used to throw the whole provider away and, with the others blocked, build the map flat).
-            for(let attempt = 0; attempt < 3 && !res; attempt++){
-                if(attempt) await new Promise(r=>setTimeout(r, (prov.gap||250) * 2 * attempt + 400));
-                try { res = await prov.run(batch); } catch(e){ res = null; ELEV_LAST_ERR = prov.name+': '+(e && e.message || e); }
+    const sleep = ms => new Promise(r=>setTimeout(r, ms));
+    const slot = async (prov)=>{                      // pace request starts per service
+        const now = Date.now(), at = Math.max(now, prov._next || 0);
+        prov._next = at + (prov.gap || 0);
+        if(at > now) await sleep(at - now);
+    };
+    const nb = Math.ceil(locs.length / ELEV_BATCH), got = new Array(nb).fill(null);
+    let pref = 0, done = 0, failed = false, next = 0;
+    const used = new Set();
+    const runBatch = async (bi)=>{
+        const batch = locs.slice(bi*ELEV_BATCH, (bi+1)*ELEV_BATCH);
+        for(let pi = pref; pi < providers.length && !failed; pi++){
+            const prov = providers[pi];
+            for(let attempt = 0; attempt < 3; attempt++){
+                if(attempt) await sleep((prov.gap||250) * 2 * attempt + 400);
+                await slot(prov);
+                let res = null;
+                try { res = await prov.run(batch); } catch(e){ ELEV_LAST_ERR = prov.name+': '+(e && e.message || e); }
+                if(res){ got[bi] = res; used.add(prov.name); done++; if(onProgress) onProgress(done, nb); return true; }
             }
-            if(!res){ ok = false; console.warn('[elevation] '+prov.name+' failed at batch '+(i/ELEV_BATCH+1)+' ('+ELEV_LAST_ERR+')'); break; }
-            for(const h of res) out.push(h);
-            // be gentle with public endpoints between batches
-            if(i+ELEV_BATCH < locs.length) await new Promise(r=>setTimeout(r, prov.gap||250));
+            console.warn('[elevation] '+prov.name+' failed batch '+(bi+1)+' ('+ELEV_LAST_ERR+') - trying the next service');
+            if(pref <= pi) pref = pi + 1;                // later batches skip it
         }
-        if(ok && out.length===locs.length){ console.log('[elevation] heights from '+prov.name); return out; }
-    }
-    return null;   // every provider failed → flat fallback
+        return false;
+    };
+    const worker = async ()=>{
+        while(!failed && next < nb){ const bi = next++; if(!(await runBatch(bi))) failed = true; }
+    };
+    await Promise.all(Array.from({ length: Math.min(ELEV_WORKERS, nb) }, worker));
+    if(failed || got.some(g=>!g)) return null;           // a batch no service could answer: flat fallback
+    console.log('[elevation] heights from '+[...used].join(' + ')+' ('+nb+' batches)');
+    return [].concat(...got);
 }
+const ELEV_WORKERS = 4;   // S47n: elevation batches in flight at once
 
 // ── Topography grid — the shared terrain surface (single source of truth) ─────
 // We sample elevation on a regular N×N grid over the catchment ONCE, up front,
@@ -7022,8 +7026,30 @@ let TOPO_GRID = null;   // { lat0, lon0, n, halfM, heights:[n*n], minH, rangeM }
 let   TOPO_N = 24;      // grid resolution (24×24 = 576 pts ≈ 6 batches); S46d: grows with the radius
 let   TOPO_STATUS = { ok:false, msg:'' };   // S46d: shown on the road screen so a flat map is never a mystery
 
-async function sampleTopoGrid(lat0, lon0){
+// S47n: a fetched grid is remembered per place / radius / size (localStorage, last TOPO_KEEP),
+// so rebuilding the same map, or coming back to it, skips terrain sampling entirely.
+const TOPO_KEEP = 12, TOPO_KEY = 'ts_topo_v1_';
+function topoCacheGet(key){ try { const v = JSON.parse(localStorage.getItem(key) || 'null'); return Array.isArray(v) ? v : null; } catch(e){ return null; } }
+function topoCachePut(key, elev){
+    try {
+        localStorage.setItem(key, JSON.stringify(elev));
+        let idx = JSON.parse(localStorage.getItem(TOPO_KEY + 'index') || '[]').filter(k=>k!==key); idx.push(key);
+        while(idx.length > TOPO_KEEP) localStorage.removeItem(idx.shift());
+        localStorage.setItem(TOPO_KEY + 'index', JSON.stringify(idx));
+    } catch(e){ /* storage full / blocked: just not remembered */ }
+}
+async function sampleTopoGrid(lat0, lon0, onProgress){
     const n = TOPO_N, half = RADIUS;
+    const ckey = TOPO_KEY + lat0.toFixed(5) + '_' + lon0.toFixed(5) + '_' + n + '_' + half;
+    const cached = topoCacheGet(ckey);
+    if(cached && cached.length === n*n){
+        let minH = Infinity, maxH = -Infinity; for(const v of cached){ if(v<minH) minH=v; if(v>maxH) maxH=v; }
+        TOPO_GRID = { lat0, lon0, n, halfM: half, heights: cached, minH, rangeM: maxH-minH };
+        TOPO_STATUS = { ok:true, msg:'' };
+        if(onProgress) onProgress(1, 1, true);
+        console.log('[topo] remembered grid '+n+'x'+n);
+        return TOPO_GRID;
+    }
     const locs = [];
     for(let r=0;r<n;r++) for(let cc=0;cc<n;cc++){
         const mx = -half + (2*half)*(cc/(n-1));   // east metres
@@ -7031,8 +7057,10 @@ async function sampleTopoGrid(lat0, lon0){
         locs.push(unproject(mx, mz, lat0, lon0));
     }
     ELEV_LAST_ERR = '';
-    const elev = await fetchElevations(locs);
+    let elev = await fetchElevations(locs, onProgress);
     if(!elev){ TOPO_STATUS = { ok:false, msg: ELEV_LAST_ERR || 'NO TERRAIN SERVICE REACHABLE' }; return null; }
+    elev = elev.map(v => Math.round(v * 10) / 10);           // as remembered, so a rebuild matches exactly
+    topoCachePut(ckey, elev);
     let minH = Infinity, maxH = -Infinity; for(const v of elev){ if(v<minH) minH=v; if(v>maxH) maxH=v; }
     TOPO_GRID = { lat0, lon0, n, halfM: half, heights: elev, minH, rangeM: maxH-minH };
     TOPO_STATUS = { ok:true, msg:'' };
@@ -7981,8 +8009,18 @@ function buildingsFromFootprints(footprints, scaledRoads, mx, mz, gmin, skipProx
 // limit page (starting with "<") under load, which would make .json() throw a
 // cryptic "Unexpected token '<'". We read text first and give a clear message.
 async function fetchJSON(url, opts){
-    const res = await fetch(url, opts);
-    const text = await res.text();
+    // S47n: opts.timeoutMs aborts a request that stalls (fetch has no timeout of its own)
+    const ms = (opts && opts.timeoutMs) || 0;
+    let ctl = null, tid = null;
+    if(ms && typeof AbortController !== 'undefined'){ ctl = new AbortController(); tid = setTimeout(()=>ctl.abort(), ms); }
+    let res, text;
+    try {
+        res = await fetch(url, ctl ? Object.assign({}, opts, { signal: ctl.signal }) : opts);
+        text = await res.text();
+    } catch(e){
+        if(ctl && ctl.signal.aborted) throw new Error('no answer after '+Math.round(ms/1000)+' s');
+        throw e;
+    } finally { if(tid) clearTimeout(tid); }
     if(!res.ok){
         const snip = text.slice(0,120).replace(/\s+/g,' ').trim();
         throw new Error('Server returned '+res.status+(snip?(' \u2014 '+snip):''));
@@ -8005,7 +8043,7 @@ async function overpass(query){
     for(const url of mirrors){
         for(let attempt=0; attempt<2; attempt++){
             try {
-                return await fetchJSON(url, { method:'POST', body:'data='+encodeURIComponent(query) });
+                return await fetchJSON(url, { method:'POST', body:'data='+encodeURIComponent(query), timeoutMs:65000 });   // S47n
             } catch(e){
                 lastErr = e;
                 await new Promise(r=>setTimeout(r, 800));
@@ -8644,23 +8682,23 @@ async function startBuild(opts){
         else {
             setStatus('\u2460 Geocoding "'+place+'" \u2026');
             const geo = await fetchJSON('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(place),
-                { headers:{'Accept':'application/json'} });
+                { headers:{'Accept':'application/json'}, timeoutMs:20000 });   // S47n
             if(!geo.length) throw new Error('Could not find that place. Try adding a county or city, e.g. "Hatfield, Hertfordshire".');
             lat0=parseFloat(geo[0].lat); lon0=parseFloat(geo[0].lon); geoName = geo[0].display_name;
         }
 
         // STEP 1: sample the terrain grid up front — the shared height surface
         // everything else reads from. If it fails, we carry on flat.
-        setStatus('\u2460 Found: '+geoName+'\n\u2461 Sampling terrain ('+TOPO_N+'\u00d7'+TOPO_N+' grid) \u2026');
-        const grid = await sampleTopoGrid(lat0, lon0);
-        if(grid){
-            console.log('[topo] '+TOPO_N+'x'+TOPO_N+' grid, range '+grid.rangeM.toFixed(0)+' m');
-        } else {
-            TOPO_GRID = null;
-            console.warn('[topo] terrain grid unavailable — roads will build flat.');
-        }
-
-        setStatus((grid?('\u2461 Terrain range '+grid.rangeM.toFixed(0)+' m.\n'):'\u2461 Terrain unavailable (flat).\n')+'\u2462 Querying OpenStreetMap roads within '+RADIUS+' m \u2026');
+        // S47n: terrain and roads are fetched AT THE SAME TIME - the road query doesn't need heights
+        // until the roads are projected, so the grid is awaited only then.
+        let terrTxt = 'Sampling terrain ('+TOPO_N+'\u00d7'+TOPO_N+' grid) \u2026';
+        let roadTxt = 'Querying OpenStreetMap roads within '+RADIUS+' m \u2026';
+        const buildStatus = ()=> setStatus('\u2460 Found: '+geoName+'\n\u2461 '+terrTxt+'\n\u2462 '+roadTxt);
+        TOPO_GRID = null; buildStatus();
+        const gridP = sampleTopoGrid(lat0, lon0, (d, n, remembered)=>{
+                terrTxt = remembered ? 'Terrain remembered from last time.' : 'Sampling terrain '+d+'/'+n+' \u2026'; buildStatus(); })
+            .then(g=>{ terrTxt = g ? ('Terrain range '+g.rangeM.toFixed(0)+' m.') : 'Terrain unavailable (flat).'; buildStatus(); return g; })
+            .catch(e=>{ console.warn('[topo]', e); return null; });
 
         // Four clauses, deliberately different:
         //  1. Public roads — must be named, so we get "Hatfield Road" rather than
@@ -8702,6 +8740,14 @@ async function startBuild(opts){
 );
 out geom;`;
         const op = await overpass(q);
+        roadTxt = 'Got '+((op.elements||[]).length)+' road fragments.'; buildStatus();
+        const grid = await gridP;          // S47n: the terrain started alongside the roads
+        if(grid){
+            console.log('[topo] '+TOPO_N+'x'+TOPO_N+' grid, range '+grid.rangeM.toFixed(0)+' m');
+        } else {
+            TOPO_GRID = null;
+            console.warn('[topo] terrain grid unavailable — roads will build flat.');
+        }
         if(!op.elements || !op.elements.length) throw new Error('No roads or circuits found there. Try a more built-up town or suburb name.');
 
         // ── DIAGNOSTIC: what is STILL being excluded? ────────────────────────
