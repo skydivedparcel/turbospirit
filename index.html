@@ -5942,7 +5942,17 @@ let CS = { phase:'idle', typed:['','','',''], line:0, ch:0,
 let CS_PADSEL = null;
 let csTimer = null, csRAF = null;
 
-function csClear(){ cctx.fillStyle=CS_GREEN; cctx.fillRect(0,0,256,192); }
+const GAME_VERSION = 'V1.0';   // S47o: shown bottom-left of SELECT A CITY
+function csVersion(){            // 3x5 font, black ink on the green paper
+    cctx.fillStyle = CS_BLACK;
+    let x = 2; const y = 192 - 7;
+    for(const ch of GAME_VERSION){
+        const g = F35[ch] || F35[' '];
+        for(let r = 0; r < 5; r++) for(let b = 0; b < 3; b++) if(g[r] & (1 << (2 - b))) cctx.fillRect(x + b, y + r, 1, 1);
+        x += 4;
+    }
+}
+function csClear(){ cctx.fillStyle=CS_GREEN; cctx.fillRect(0,0,256,192); csVersion(); }
 function csPaint(){
     csClear();
     zxCentre(cctx,'SELECT A CITY',ROW_HEAD,CS_BLACK,CS_GREEN);
