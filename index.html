@@ -214,6 +214,49 @@ body.touch #map {
     body.touch #stage #map { display:block; flex:1 1 0; min-width:0; width:auto; height:auto;
         max-height:100vh; max-height:100dvh; aspect-ratio:300 / 252; object-fit:contain; border:none; }
 }
+/* S48l: phone keys (ZX Spectrum rubber keys) and landscape only */
+:root { --zk: min(19vh, 11vw); --sl: env(safe-area-inset-left, 0px); --sr: env(safe-area-inset-right, 0px);
+        --st: env(safe-area-inset-top, 0px); --sb: calc(env(safe-area-inset-bottom, 0px) + 30px); }
+@supports (height: 1dvh){ :root { --zk: min(19dvh, 11vw); } }   /* S48o: a bad dvh in a custom property would blank every key on old iOS */
+#zxkeys { display:none; position:fixed; inset:0; z-index:9000; pointer-events:none; }
+body.touch.driving.zxkeys-on #zxkeys { display:block; }
+.zxk { position:absolute; width:var(--zk); height:calc(var(--zk) * 44 / 46); pointer-events:auto; touch-action:none;
+    user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent; }
+.zxk::before { content:''; position:absolute; inset:-6px; }   /* S48o: touch area a little bigger than the key */
+.zxk.small { width:calc(var(--zk) * 0.78); height:calc(var(--zk) * 0.78 * 34 / 62); }
+.zxk canvas { position:absolute; inset:0; width:100%; height:100%; image-rendering:pixelated; image-rendering:crisp-edges; display:block; }
+.zxk canvas.dn { visibility:hidden; }
+.zxk.on canvas.up { visibility:hidden; }
+.zxk.on canvas.dn { visibility:visible; }
+/* staggered like the Spectrum's rows: A sits a third of a key right of Q; O P one row, in from the edge */
+#zk-a { left:calc(var(--sl) + 16px + var(--zk) * 0.34); bottom:var(--sb); }
+#zk-q { left:calc(var(--sl) + 16px); bottom:calc(var(--sb) + var(--zk) * 44 / 46 + 12px); }
+#zk-o { right:calc(var(--sr) + var(--zk) + 28px); bottom:calc(var(--sb) + var(--zk) * 0.12); }
+#zk-p { right:calc(var(--sr) + 16px); bottom:calc(var(--sb) + var(--zk) * 0.12); }
+.zxk.wide { width:calc(var(--zk) * 2 + 12px); }
+#zk-t { right:calc(var(--sr) + 16px); bottom:calc(var(--sb) + var(--zk) * 1.08 + 12px); }   /* S48r: TURBO over O and P */
+#zk-e { left:calc(var(--sl) + 12px); top:calc(var(--st) + 10px); }
+#zk-brk { left:calc(var(--sl) + 12px); top:calc(var(--st) + 18px + var(--zk) * 0.78 * 34 / 62); }
+body.touch.driving.zxkeys-on #stage { padding-left:calc(var(--sl) + var(--zk) * 1.34 + 26px); padding-right:var(--sr); box-sizing:border-box; }
+@media (orientation: landscape){
+    body.touch.driving.zxkeys-on #stage #c { width:min(133.333vh, calc(100vw - var(--sl) - var(--sr) - var(--zk) * 3.6 - 48px)); width:min(133.333dvh, calc(100vw - var(--sl) - var(--sr) - var(--zk) * 3.6 - 48px)); }
+    body.touch.driving.zxkeys-on #stage #map { align-self:flex-start; margin-top:var(--st); max-height:calc(100vh - var(--zk) * 2.1 - var(--sb) - 30px); max-height:calc(100dvh - var(--zk) * 2.1 - var(--sb) - 30px); }
+}
+#zxrotate { display:none; position:fixed; inset:0; z-index:30000; background:#000; flex-direction:column; align-items:center; justify-content:center; gap:18px; }
+/* S48p: no blocking rotate screen (WhatsApp's viewer never rotates); upright layout for the keys instead */
+@media (orientation: portrait){
+    :root { --zk: min(22vw, calc((100vh - 75vw) / 3.4)); }
+    body.touch.driving.zxkeys-on #stage { padding-left:0; padding-right:0; }
+    body.touch.driving.zxkeys-on #stage #map { height:auto; width:auto; max-width:calc(100vw - 16px);
+        max-height:calc(100vh - 75vw - var(--sb) - var(--zk) * 2.6 - 24px); aspect-ratio:300 / 252; }
+    #zk-e { top:auto; left:calc(var(--sl) + 16px); bottom:calc(var(--sb) + var(--zk) * 2.04 + 22px); }   /* S48r: above Q */
+    #zk-brk { top:auto; left:calc(var(--sl) + var(--zk) * 0.78 + 24px); bottom:calc(var(--sb) + var(--zk) * 2.04 + 22px); }
+}
+@supports (height: 1dvh){ @media (orientation: portrait){
+    :root { --zk: min(22vw, calc((100dvh - 75vw) / 3.4)); }
+    body.touch.driving.zxkeys-on #stage #map { max-height:calc(100dvh - 75vw - var(--sb) - var(--zk) * 2.6 - 24px); }
+} }
+#zxrotate canvas { image-rendering:pixelated; display:block; }
 #tp-pad { position:fixed; top:6px; left:6px; z-index:9001; display:none;
     font:bold 11px monospace; color:#000; background:#C0C000; padding:4px 6px; }
 </style>
@@ -298,7 +341,7 @@ body.touch #map {
 </div>
 
 <!-- S37: phones drive with a connected controller; this shows while driving without one -->
-<div id="tp-pad">CONNECT A CONTROLLER</div>
+<div id="tp-pad">CONNECT A CONTROLLER</div><!-- S48l: no longer shown: phones have on-screen keys -->
 
 <!-- ── Options screen: Spectrum-style, opened with Start / Esc ── -->
 <div id="opts">
@@ -1815,30 +1858,558 @@ function readGamepad(){
     const _hb = (typeof PAD_MAP!=='undefined') ? PAD_MAP.handbrake : 0;
     const _rs = (typeof PAD_MAP!=='undefined') ? PAD_MAP.reset     : 8;   // S47k
     const _tb = (typeof PAD_MAP!=='undefined') ? PAD_MAP.turbo     : 2;
-    if(gp.buttons[_hb] && gp.buttons[_hb].pressed) INPUT.handbrake = true;
     if(gp.buttons[_rs] && gp.buttons[_rs].pressed) INPUT.reset = true;
     if(gp.buttons[_tb] && gp.buttons[_tb].pressed) INPUT.turbo = true;
+}
+
+// ─── S48a: 3D DRIVING MODEL (GTA III-style) ─────────────────────────────────────────────────────────
+// A real top-down car: a velocity VECTOR, a yaw RATE, and two axles whose tyres make sideways force from
+// their slip angle (how far the way a wheel is pointing differs from the way it is moving). Grip
+// saturates and falls away past the peak, so a car pushed too hard slides. Load moves to the front
+// under braking (turn-in) and to the rear under power. The handbrake locks the rear wheels: they lose
+// most of their sideways grip and drag, so the tail swings out (a real handbrake turn), not a sharper
+// turn rate. The camera trails the car and the car sprite shows its true angle to the camera, so a
+// slide is seen as the car going sideways.
+//
+// DIGITAL STEERING (d-pad / keyboard / future phone buttons): a key can't say "a little", so as in
+// GTA III the front wheels sweep towards lock at a fixed rate while the key is held and spring back
+// faster when it's released; a tap is a small correction, a hold is a full turn. The lock available
+// shrinks with speed to what the front tyres can actually use, so holding a key at speed turns as hard
+// as the tyres allow instead of ploughing straight on. Past that, counter-steer is allowed up to the
+// car's slip angle so a slide can be caught. A gentle yaw assist (off while the handbrake is held and
+// briefly after) stops a lift-off spin on a d-pad. An analogue stick works too: its value is the
+// fraction of the available lock.
+//
+// Units are the game's: world units (wu) and 55 ms frames. At the speedo's scale 1 wu ≈ 1.83 m, so
+// 1 g = 9.81 m/s² ≈ 0.0162 wu/frame². Mass = 1 (forces are accelerations).
+//
+// It drives the existing systems through the same two values as before: CAR.speed (signed, + = moving
+// nose-first) and CAR.velDir (direction of travel). Collisions, scrapes, traffic bumps, the wrap,
+// resets and Saturday Night all keep working on those unchanged; the yaw change goes through the old
+// "turn into a wall" check. OPTIONS > ADVANCED > DRIVING switches between 3D and ARCADE (V1.0).
+const DRIVE3D = { on: true };
+const DRIVE3D_STORE = 'turbospirit_drive';
+(function d3Load(){ try { const v = localStorage.getItem(DRIVE3D_STORE); if(v === 'arcade') DRIVE3D.on = false; } catch(e){} })();
+function d3Toggle(){ DRIVE3D.on = !DRIVE3D.on; try { localStorage.setItem(DRIVE3D_STORE, DRIVE3D.on ? '3d' : 'arcade'); } catch(e){}
+    CAR.velDir = CAR.yaw; if(CAR.d3){ CAR.d3.w = 0; CAR.d3.delta = 0; } }
+
+const D3 = {
+    g: 0.0162,          // 1 g in wu/frame²
+    a: 1.25, b: 1.35,   // centre of mass to front / rear axle (wu): wheelbase 2.6 (≈ 4.8 m), a touch nose-heavy
+    k2: 1.75,           // yaw inertia / mass (wu²)
+    mu: 1.5,            // tyre grip (× load): ~1.5 g of cornering, the same as V1.0's plain steering
+    muOff: 0.65,        // grip factor off the tarmac
+    pkF: 0.15, pkR: 0.13,   // slip angle of peak grip, front / rear (rad). Rear peaks earlier = stable (understeer)
+    slideKeep: 0.78,    // share of peak grip left when a tyre is fully sliding (the "let go" of a slide)
+    longK: 8,           // longitudinal grip × lateral: arcade launches and brakes (the friction ellipse)
+    wt: 0.17,           // weight transfer: share of the car's weight moved between axles at full effect (≈ ±33% axle load)...
+    wtFull: 0.06,       // ...reached at this longitudinal acceleration (wu/frame²; the game's launch / brakes are arcade-strong)
+    // engine / brakes (speeds: DRIVE_P.maxFwd = 125 mph)
+    drive: 0.059,       // launch acceleration; tapers to 0 at 1.05 × top speed: 0–125 mph in ~3 s
+    coast: 0.012,       // air drag (× speed per frame)
+    roll: 0.0012,       // rolling resistance off the throttle (wu/frame²): a coasting car stops
+    brake: 0.04,        // full brake, 60% front. S48g: 0.09 -> 0.04 (125 -> 0 in 1.9 s, was 0.9 s): less aggressive
+    brakeF: 0.6,
+    revDrive: 0.02,     // reverse
+    // handbrake: rear wheels locked
+    hbGrip: [0.7, 0.4, 0.15],   // rear sideways grip left, by OPTIONS > HANDBRAKE TURN (LOW / MEDIUM / HIGH)
+    hbDrag: 0.3,        // rear sliding drag (× rear grip)
+    // digital steering
+    lock: 0.6,          // full lock (rad, ~34°): parking speed
+    steerIn: 0.25,      // wheels sweep to the available lock in 4 frames (0.22 s)...
+    steerOut: 0.45,     // ...and back to straight in about 2
+    steerGrip: 1.15,    // available lock at speed = what holds the front tyres at this × their peak slip
+    hbLock: 0.42,       // the handbrake allows at least this much lock (rad), to swing the tail
+    assist: 0.12,       // yaw assist strength per frame (0 = none)
+    assistHold: 12,     // frames after the handbrake before it comes back
+    lowSpd: 0.22,       // below this the car follows its wheels (parking), blending into the tyre model above
+    floor: 0.08,        // speed floor in slip angles (keeps low speed stable)
+    sub: 4,             // physics substeps per frame
+    // camera / sprite
+    camSlip: 45,        // the camera swings this far (deg) towards the direction of travel in a slide...
+    camFollow: 0.6,     // ...by this share of the slip, so the rest shows as the car turned sideways
+    spriteSteer: 0.25,  // the body leans this share of the front wheel angle
+};
+
+function d3State(){ return CAR.d3 || (CAR.d3 = { delta: 0, w: 0, ax: 0, hbHold: 0, last: 0, dyaw: 0, slipR: 0, mo: 0, mt: 0 }); }
+function d3Tyre(x, keep){   // normalised slip → share of peak grip: rises to 1 at x = 1, falls to `keep` by x = 2.5
+    const ax = Math.abs(x);
+    if(ax <= 1) return 1.5 * x - 0.5 * x * x * x;
+    return Math.sign(x) * (1 - (1 - keep) * Math.min(1, (ax - 1) / 1.5));
+}
+
+// One frame of physics. Replaces the V1.0 throttle / brake / turbo block. Writes CAR.speed, CAR.velDir
+// and CAR.d3.dyaw (the turn, applied later through the wall check). prevSpeed = |speed| at frame start.
+function d3Physics(hb, prevSpeed){
+    const P = D3, S = d3State(), D2R = Math.PI / 180;
+    const thr = INPUT.throttle, brk = INPUT.brakeRev;
+    // the velocity vector, rebuilt from what the rest of the game left in speed / velDir
+    const vd = CAR.velDir * D2R;
+    let vx = Math.sin(vd) * CAR.speed, vz = Math.cos(vd) * CAR.speed;
+    const spd0 = Math.abs(CAR.speed);
+    if(spd0 === 0) S.w = 0;
+    else if(S.last > 0.05 && spd0 < S.last * 0.9) S.w *= spd0 / S.last;   // hit or scraped something: spin cut with speed
+    S.hbHold = hb ? P.assistHold : Math.max(0, S.hbHold - 1);
+    const hbA = CAR.hbAmt;                                                  // 0..1, eased at OPTIONS > HANDBRAKE SPEED
+    const rearHB = 1 - (1 - P.hbGrip[HB_SET.turn]) * hbA;
+    const mu = P.mu * (CAR.offRoad ? P.muOff : 1), L = P.a + P.b;
+    let yaw = CAR.yaw * D2R;
+
+    // ── digital steering: sweep the wheels towards the lock the tyres can use at this speed ──
+    {
+        const fx = Math.sin(yaw), fz = Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+        const u = vx * fx + vz * fz, vy = vx * rx + vz * rz, au = Math.max(Math.abs(u), 0.05);
+        let dMax = Math.min(P.lock, L * mu * P.g / (au * au) + P.pkF * P.steerGrip);
+        const slip = Math.abs(Math.atan2(vy, au));
+        if(INPUT.steer * vy > 0) dMax = Math.max(dMax, Math.min(P.lock, slip + P.pkF));   // counter-steer up to the slide (S48d: only when steering against it)
+        dMax += (Math.max(dMax, P.hbLock) - dMax) * hbA;
+        const tgt = Math.max(-1, Math.min(1, INPUT.steer)) * dMax;
+        const back = Math.abs(tgt) < Math.abs(S.delta) || tgt * S.delta < 0;
+        const rate = dMax * (back ? P.steerOut : P.steerIn);
+        S.delta += Math.max(-rate, Math.min(rate, tgt - S.delta));
+        if(Math.abs(S.delta) > dMax) S.delta = Math.sign(S.delta) * dMax;
+    }
+    const cd = Math.cos(S.delta), sd = Math.sin(S.delta), tanD = Math.tan(S.delta);
+
+    // ── pedals: drive (rear wheels, signed along the nose) and brake (opposes motion) ──
+    {
+        const u0 = vx * Math.sin(yaw) + vz * Math.cos(yaw);
+        S.drive = 0; S.brake = 0;
+        const top = DRIVE_P.maxFwd * 1.05, rev = Math.abs(DRIVE_P.maxRev);
+        if(brk > 0){
+            if(u0 > 0.02){ S.brake = P.brake * brk; CAR.revHold = 0; }
+            else if(thr > 0){ CAR.revHold = 0; S.brake = P.brake * brk; }            // both pedals: hold still
+            else if(u0 < -0.02 || ++CAR.revHold > DRIVE_P.reverseDelay)
+                S.drive = -P.revDrive * brk * Math.max(0, 1 - (Math.max(0, -u0) / rev) ** 2);
+            else S.brake = P.brake * brk;
+        } else if(thr > 0){
+            CAR.revHold = 0;
+            if(u0 < -0.02) S.brake = P.brake * thr;
+            else S.drive = Math.max(0, P.drive * thr * (1 - (Math.max(0, u0) / top) ** 2) + thr * Math.max(0, u0) * P.coast)   /* S48d: never negative: above 1.05 × top (turbo) it was strong 'engine braking' on the rear, which threw the weight forward and spun the car */;   // net of drag: tops out at 1.05 × top
+        } else CAR.revHold = 0;
+        S.drive *= 1 - hbA;                                                      // locked wheels don't drive
+    }
+
+    // ── integrate ──
+    const n = P.sub, dt = 1 / n;
+    let dyaw = 0;
+    for(let k = 0; k < n; k++){
+        const fx = Math.sin(yaw), fz = Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+        const u = vx * fx + vz * fz, vy = vx * rx + vz * rz, w = S.w;
+        const dN = P.wt * P.g * Math.max(-1, Math.min(1, S.ax / P.wtFull));   // load to the rear under power, to the front under braking
+        const Nf = P.g * P.b / L - dN, Nr = P.g * P.a / L + dN;
+        // wheel velocities in each wheel's own frame
+        const vfl = u * cd + (vy + P.a * w) * sd, vft = -u * sd + (vy + P.a * w) * cd;
+        const vrl = u, vrt = vy - P.b * w;
+        const aF = Math.atan2(vft, Math.max(Math.abs(vfl), P.floor));
+        const aR = Math.atan2(vrt, Math.max(Math.abs(vrl), P.floor));
+        // longitudinal forces
+        const stopF = Math.min(1, Math.abs(vfl) / 0.02), stopR = Math.min(1, Math.abs(u) / 0.02);
+        let FxF = -Math.sign(vfl) * S.brake * P.brakeF * stopF;
+        let FxR = S.drive - Math.sign(u) * S.brake * (1 - P.brakeF) * stopR;
+        FxR -= Math.sign(u) * P.hbDrag * mu * Nr * hbA * Math.min(1, Math.abs(u) / 0.05);
+        if(thr === 0) FxR -= Math.sign(u) * Math.min(P.roll, Math.abs(u));      // rolling
+        // lateral forces, limited by the friction ellipse
+        const capF = mu * Nf * Math.sqrt(Math.max(0.05, 1 - (FxF / (P.longK * mu * Nf)) ** 2));
+        const capR = mu * Nr * rearHB * Math.sqrt(Math.max(0.05, 1 - (FxR / (P.longK * mu * Nr)) ** 2));
+        const FyF = -capF * d3Tyre(aF / P.pkF, P.slideKeep);
+        const FyR = -capR * d3Tyre(aR / (P.pkR * (0.6 + 0.4 * rearHB)), P.slideKeep * (0.7 + 0.3 * rearHB));
+        // body forces and turning moment
+        const Fbx = FxR + FxF * cd - FyF * sd;
+        const Fby = FyR + FxF * sd + FyF * cd;
+        const Mz = P.a * (FxF * sd + FyF * cd) - P.b * FyR;
+        vx += (Fbx * fx + Fby * rx) * dt;
+        vz += (Fbx * fz + Fby * rz) * dt;
+        S.w += Mz / P.k2 * dt;
+        S.ax += (Fbx - S.ax) * 0.5;
+        { const dr = P.coast * dt; vx -= vx * dr; vz -= vz * dr; }   // S48d: air drag on the body, not through the rear tyres or the weight transfer
+        // brakes and drag stop the car; they never push it backwards
+        const u2 = vx * fx + vz * fz;
+        if(S.drive === 0 && u2 * u < 0){ vx -= u2 * fx; vz -= u2 * fz; }
+        // low speed: the car follows its wheels (no tyre-model wobble when parking)
+        const kb = Math.max(0, Math.min(1, 1 - Math.hypot(vx, vz) / P.lowSpd));   // total speed: a fast slide is not parking
+        const wKin = u2 * tanD / L;
+        if(kb > 0){
+            S.w += (wKin - S.w) * kb * 0.5;
+            const vy2 = vx * rx + vz * rz; vx -= vy2 * kb * 0.5 * rx; vz -= vy2 * kb * 0.5 * rz;
+        }
+        // yaw assist (d-pad): ease the spin towards what the wheels ask for, within the grip
+        if(S.hbHold === 0 && P.assist > 0){
+            const lim = mu * P.g * 1.1 / Math.max(Math.abs(u2), 0.05);
+            const wt = Math.max(-lim, Math.min(lim, wKin));
+            S.w += (wt - S.w) * P.assist * dt * (1 - kb);
+        }
+        S.slipR = aR;
+        const dy = S.w * dt; yaw += dy; dyaw += dy;
+    }
+
+    // ── write back: speed (+ = nose first, with hysteresis so a sideways car doesn't flicker) and direction ──
+    let mag = Math.hypot(vx, vz);
+    const uN = vx * Math.sin(yaw) + vz * Math.cos(yaw);
+    let sgn = CAR.speed < 0 ? -1 : 1;
+    if(sgn > 0 && uN < -0.3 * mag) sgn = -1; else if(sgn < 0 && uN > 0.3 * mag) sgn = 1;
+    // top speed and turbo, on the magnitude (S35 rules: turbo only from top speed)
+    const base = DRIVE_P.maxFwd, topT = base + DRIVE_P.turboAdd;
+    if(sgn > 0 && mag > base){
+        mag = CAR.turbo ? Math.min(topT, Math.max(prevSpeed, base) + DRIVE_P.turboAccel)
+                        : Math.max(base, Math.min(mag, prevSpeed - DRIVE_P.turboFade));
+    }
+    if(mag < 0.003 && thr === 0 && !(brk > 0 && CAR.revHold > DRIVE_P.reverseDelay)){ mag = 0; S.w = 0; }
+    if(mag === 0){ CAR.speed = 0; CAR.velDir = CAR.yaw; }
+    else {
+        const dir = Math.atan2(vx, vz) / D2R + (sgn < 0 ? 180 : 0);
+        CAR.velDir = ((dir % 360) + 360) % 360;
+        CAR.speed = sgn * mag;
+    }
+    S.dyaw = dyaw / D2R;
+    S.last = mag;
+}
+
+// The turn, through V1.0's wall check (which keeps the car from rotating into a building).
+function d3Turn(){
+    const S = d3State();
+    CAR.yaw = ((CAR.yaw + S.dyaw) % 360 + 360) % 360;
+}
+
+// Camera: GTA III style, behind the nose, swinging part-way towards the direction of travel in a slide.
+function d3CamYaw(){
+    const S = d3State();
+    if(CAR.speed <= 0.05) return CAR.yaw;
+    let slip = ((CAR.velDir - CAR.yaw + 540) % 360) - 180;
+    slip = Math.max(-D3.camSlip, Math.min(D3.camSlip, slip));
+    return CAR.yaw + slip * D3.camFollow * Math.min(1, CAR.speed / 0.3);
+}
+
+// The sprite shows the car's real angle to the camera (+ a little lean with the wheels). Knocks added
+// to modelYaw elsewhere (traffic bumps) ride on top and fade.
+function d3Sprite(){
+    if(CAR.wreck || CAR.crash.active) return;
+    const S = d3State();
+    const tgt = (((CAR.yaw - CAM.yaw + 540) % 360) - 180) + S.delta * 180 / Math.PI * D3.spriteSteer;
+    // S48k: brake-turn (GTA driving) - the car swings a little further into the turn on screen, as if the tail steps out
+    if(Math.abs(INPUT.steer) > 0) S.btDir = Math.sign(INPUT.steer);
+    const bt = CAR.brakeTurn || 0, tgtB = tgt + (bt > 0 && typeof GTA !== 'undefined' ? (S.btDir || 0) * GTA.btVis * bt : 0);
+    S.mo = (CAR.modelYaw - S.mt) * 0.7;
+    CAR.modelYaw = tgtB + S.mo;
+    S.mt = tgtB;
+}
+
+// ─── S48b: GTA III-STYLE TYRES + CAMERA ON A STRING ──────────────────────────────────────────────────
+// Modelled on the reverse-engineered GTA III code (re3: CVehicle::ProcessWheel, CAutomobile::ProcessControlInputs,
+// CCam::Process_Cam_On_A_String / RotCamIfInFrontCar / WellBufferMe), in this game's units (wu, 55 ms frames).
+//
+// TYRES (DRIVING: GTA). Each axle asks for the push that would cancel the sideways speed of its contact patch
+// (a share of it per step, as GTA divides by the wheels on the ground) plus the engine / brake push along the
+// wheel. If the total is within the axle's grip ("adhesion" = grip × load × traction bias) it is applied in
+// full: below the limit the car goes exactly where its wheels point, with no slip angle. Past the limit the axle
+// SKIDS: the sideways push is cut to adhesion × fTractionLoss, and while the car is skidding the lower limit applies, so a
+// slide lets go and has to be caught (GTA's bAlreadySkidding, cleared when no axle skids rather than GTA's never-reset
+// static, but shared by the whole car as in GTA, so front and rear let go together). A wheel braked harder than its grip locks (WHEEL_STATE_FIXED): it then tries to stop its contact
+// patch in both directions with the same limited grip. The handbrake is GTA's: a huge rear brake, so the rear
+// wheels lock, their grip goes on stopping and little is left to hold the tail. A braking wheel gets no drive.
+// One departure from GTA: an unlocked tyre gives its sideways grip priority and the engine / brakes get what is
+// left (GTA scales both together). The game's arcade engine is ~5x stronger than tyre grip, so with GTA's rule full
+// throttle - all a d-pad can give - spins any car that is sliding.
+// STEERING: GTA's. The key / stick value is eased towards (0.2 of the gap per 1/50 s tick) and SQUARED, times a
+// fixed lock: a tap gives a little lock, a hold the full lock. GTA III has no speed-sensitive lock, so a held key
+// at speed asks the stiff front tyres for ~20x what they can give and the car ploughs on, skidding (GTA players tap).
+// For a d-pad, GTA.speedLock (on) caps the lock to what the front grip can use at the current speed, plus the
+// car's slip angle for counter-steer; the eased, squared response is kept. No yaw assist (GTA has none).
+//
+// CAMERA (CAMERA: STRING, with DRIVING 3D or GTA). GTA III's "cam on a string": the camera keeps last frame's
+// place, turns to face the car and slides to its fixed distance (here the game's 13 wu, since the car sprite is
+// a fixed size). It only turns because the car moves away from it, so it trails the line the car is actually
+// travelling and a parked car can turn on the spot without the view moving. When driving forwards and more than
+// 20° off the car's heading it swings round behind, with GTA's WellBufferMe easing (a turning speed that builds
+// up and is capped). CAMERA: CHASE is V1.1's 3D camera. ARCADE always uses V1.0's camera.
+const DRIVE_MODES = ['arcade', '3d', 'gta'];
+const DRIVE_NAMES = { arcade: 'ARCADE', '3d': '3D', gta: 'GTA' };
+const CAMSTR = { on: true };
+const CAM_STORE = 'turbospirit_cam';
+(function gtaLoad(){
+    try {
+        const v = localStorage.getItem(DRIVE3D_STORE);
+        DRIVE3D.model = (v === 'arcade' || v === '3d') ? v : 'gta';
+        DRIVE3D.on = DRIVE3D.model !== 'arcade';
+        CAMSTR.on = localStorage.getItem(CAM_STORE) !== 'chase';
+    } catch(e){ DRIVE3D.model = 'gta'; DRIVE3D.on = true; }
+})();
+function driveModeStep(dir){
+    const i = DRIVE_MODES.indexOf(DRIVE3D.model || 'gta');
+    DRIVE3D.model = DRIVE_MODES[(i + dir + DRIVE_MODES.length) % DRIVE_MODES.length];
+    DRIVE3D.on = DRIVE3D.model !== 'arcade';
+    try { localStorage.setItem(DRIVE3D_STORE, DRIVE3D.model); } catch(e){}
+    CAR.velDir = CAR.yaw; CAR.d3 = null; CAR.brakeTurn = 0;
+}
+function camModeToggle(){ CAMSTR.on = !CAMSTR.on; try { localStorage.setItem(CAM_STORE, CAMSTR.on ? 'string' : 'chase'); } catch(e){} }
+
+const GTA = {
+    tick: 55 / 20,      // GTA ticks (1/50 s) per frame of this game
+    mu: 1.8,            // grip × load: ~1.3 g of cornering, like the 3D model (GTA's skid latch and stiff tyres give less than mu)
+    muOff: 0.65,        // off the tarmac
+    tractionLoss: 0.8,  // grip left while skidding (handling.cfg fTractionLoss, as a share of grip)
+    tractionBias: 0.48, // front share of grip (handling.cfg fTractionBias; GTA is very sensitive to it): a touch rear = stable
+    longK: 8,           // grip along the wheel × sideways (arcade launches and brakes, as the 3D model)
+    hbLockGrip: [0.8, 0.6, 0.4],   // grip a locked rear keeps, by OPTIONS > HANDBRAKE TURN (LOW / MEDIUM / HIGH)
+    cancel: 2.4,        // share of an axle's sideways patch speed it tries to cancel per frame (GTA: 1/wheels per tick)
+    roll: 0.0012,       // rolling resistance with no pedal (wu/frame²)
+    turnDamp: [0.1, 0.07, 0.04],   // share of spin lost per frame while skidding, by OPTIONS > HANDBRAKE TURN (LOW / MEDIUM / HIGH)
+    lock: 60,           // steering lock (deg; handling.cfg fSteeringLock). S48c: 30 -> 45; S48f: 50, tighter turning circle
+    muLow: 3.2,         // S48f: extra grip at low speed (tight, quick turns), fading to mu by lowFade
+    lowFade: 0.67,      //   wu/frame (50 mph)
+    lowRadius: 1.5,     // S48f: a held key turns this radius (wu) at walking pace...
+    lowCurve: 47,       //   ...growing as lowRadius + lowCurve × v³ (v in wu/frame) until it meets topRadius (~60 mph)
+    steerEase: 0.45,    // GTA: m_fSteerInput moves this share of the gap per tick (GTA 0.2; S48c 0.35; S48h 0.45 at low speed, see steerEaseTop)
+    steerEaseTop: 0.4,    // S48h: share of steerEase used at top speed (build-up slows with speed²)
+    steerReturn: 0.6,  // S48h: ease per tick when the key is released / reversed (back to centre)
+    k2: 0.9,            // yaw inertia / mass (wu²); S48c 1.2 (3D model 1.75); S48f 0.9: rotates more readily at low speed
+    topRadius: 20,      // S48c (S48d: 22 -> 20 keeps the measured 22 wu turn after the S48d fixes): a held key turns this radius (wu) at top speed: grip rises with speed² to make it (arcade downforce)
+    gripEff: 0.75,      //   share of the grip a held turn actually uses (skid latch, transfer); calibrates topRadius
+    speedLock: true,    // d-pad helper (not in GTA III): lock capped to what the front grip can use at this speed...
+    speedLockGrip: 1.15,//   ...× this (S48g: replaced by lockK),
+    wtScale: 0.4,         // S48g: share of the 3D model's weight transfer used here (braking while steering threw the tail out)
+    kinSpeed: 0.55,      // S48g: below this (30 mph) the car blends into following its wheels...
+    kinBlend: 0.3,      //   ...this strongly per substep at standstill
+    lockK: 1.53,        // S48g: lock cap = atan(lockK × wheelbase / rSet); 1.53 = speedLockGrip / gripEff, the S48c-f value at speed plus the car's slip angle so a slide can still be caught. false = pure GTA steering
+    btGain: 1.07,        // S48k: brake while turning = this × the turn rate (radius ÷ this)...
+    btMin: 0.27,        //   ...above 20 mph, going forwards
+    btEase: 0.5,        //   share of the way per frame CAR.brakeTurn moves to 0 / 1
+    btBrake: 0.15,       //   share of the brake pedal while brake-turning (~20 mph lost per second: the price)
+    btVis: 14,          //   deg: extra turn on the car sprite at full brake-turn
+    // camera on a string
+    swingDeg: 20,       // RotCamIfInFrontCar: only acts past this angle, driving forwards
+    swingGain: 0.15,    // WellBufferMe TopSpeed (target turn speed = gap × this, per tick)
+    swingAcc: 0.007,    // WellBufferMe SpeedStep (turn speed closes this share of its gap per tick)
+};
+
+// One frame of GTA-style physics. Same contract as d3Physics (patches/drive3d.js): writes CAR.speed, CAR.velDir and
+// CAR.d3.{dyaw, delta, w, last}. Engine, brakes, reverse and turbo use the 3D model's numbers (D3).
+function gtaPhysics(hb, prevSpeed){
+    const P = D3, G = GTA, S = d3State(), D2R = Math.PI / 180;
+    const thr = INPUT.throttle, brk = INPUT.brakeRev;
+    const vd = CAR.velDir * D2R;
+    // S48d: above top speed (turbo) the tyres and steering work exactly as at top speed: the velocity is scaled
+    // down to top speed for the physics and back up afterwards, so turbo only adds distance, never handling.
+    const tScale = CAR.speed > DRIVE_P.maxFwd ? DRIVE_P.maxFwd / CAR.speed : 1;
+    let vx = Math.sin(vd) * CAR.speed * tScale, vz = Math.cos(vd) * CAR.speed * tScale;
+    const spd0 = Math.abs(CAR.speed);
+    if(spd0 === 0) S.w = 0;
+    else if(S.last > 0.05 && spd0 < S.last * 0.9) S.w *= spd0 / S.last;
+    const hbA = CAR.hbAmt;
+    const L = P.a + P.b, spdNow = Math.hypot(vx, vz);
+    const muBase = G.mu * (CAR.offRoad ? G.muOff : 1);
+    // S48c: grip rises with speed so a held key can always turn topRadius (needed accel = v² / R).
+    // (S48d: with turbo, spdNow is already scaled down to top speed - see tScale above.)
+    // S48f: the radius a held key turns is set by speed: tight at low speed (lowRadius + lowCurve v³), topRadius
+    // from ~60 mph up. Grip follows it (and the lock cap follows grip), so the front tyres don't slide wide at low speed.
+    // S48k: BRAKE-TURN. Brake while steering, going forwards above btMin: the car turns btGain (10%) more quickly than a
+    // plain held turn at the speed the brake-turn began, held as it slows (radius shrinks; grip and lock follow it) and the brakes slow it - the price. CAR.brakeTurn
+    // (0..1, eased) drives the extra sprite turn (d3Sprite) and the skid flecks (turboFx).
+    const btOn = brk > 0 && Math.abs(INPUT.steer) > 0 && CAR.speed > G.btMin && !CAR.offRoad;
+    CAR.brakeTurn = (CAR.brakeTurn || 0) + ((btOn ? 1 : 0) - (CAR.brakeTurn || 0)) * G.btEase;
+    if(CAR.brakeTurn < 0.01) CAR.brakeTurn = 0;
+    const rHeld = v => Math.min(G.lowRadius + G.lowCurve * v * v * v, G.topRadius);
+    if(btOn && !S.btV0) S.btV0 = spdNow; else if(!btOn) S.btV0 = 0;
+    let rSet = rHeld(spdNow);
+    if(CAR.brakeTurn > 0){
+        // the turn RATE (not the radius) is btGain × a plain held turn at the speed the brake-turn began; as the
+        // brakes slow the car the radius shrinks to keep that rate (never under lowRadius)
+        const v0 = Math.max(S.btV0 || spdNow, spdNow), wRef = G.btGain * v0 / rHeld(v0);
+        const rBT = Math.max(G.lowRadius, spdNow / wRef);
+        rSet = rSet + (Math.min(rSet, rBT) - rSet) * CAR.brakeTurn;
+    }
+    const muFloor = G.mu + (G.muLow - G.mu) * Math.max(0, 1 - spdNow / G.lowFade);
+    const mu = Math.max(muFloor, spdNow * spdNow / (rSet * P.g * G.gripEff)) * (CAR.offRoad ? G.muOff : 1);
+    let yaw = CAR.yaw * D2R;
+
+    // ── steering: eased, squared, fixed lock ──
+    {   // S48h: speed-sensitive build-up (calmer taps at speed; a held key still gets there) and a faster return to centre
+        const tgt = Math.max(-1, Math.min(1, INPUT.steer)), cur = S.sIn || 0;
+        const back = Math.abs(tgt) < Math.abs(cur) || tgt * cur < 0;
+        const vr = Math.min(1, spdNow / DRIVE_P.maxFwd);
+        const ease = back ? G.steerReturn : G.steerEase * (1 - (1 - G.steerEaseTop) * vr * vr);
+        S.sIn = cur + (tgt - cur) * (1 - Math.pow(1 - ease, G.tick));
+    }
+    if(Math.abs(S.sIn) < 1e-4) S.sIn = 0;
+    let lockR = G.lock * D2R;
+    if(G.speedLock){
+        const fx0 = Math.sin(yaw), fz0 = Math.cos(yaw), u0 = Math.abs(vx * fx0 + vz * fz0), vy0 = vx * Math.cos(yaw) - vz * Math.sin(yaw);
+        // S48g: the cap follows the target radius (rSet), not the grip: identical at speed (there mu = v² / (rSet g eff)),
+        // but at low speed the extra grip floor let the lock ask more than the front could hold, so it slid wide.
+        const kbL = Math.max(0, Math.min(1, 1 - spdNow / G.kinSpeed));   // low speed: the lock gives rSet by geometry
+        const grip = Math.atan((G.lockK + (1 - G.lockK) * kbL) * L / rSet);
+        // S48d: the extra lock for catching a slide only when steering AGAINST it (towards the way the car is
+        // travelling); steering into a slide it fed the spin
+        const counter = S.sIn * vy0 > 0;
+        lockR = Math.min(lockR, counter ? Math.max(grip, Math.abs(Math.atan2(vy0, Math.max(u0, 0.05))) + 2 * D2R) : grip);
+        if(hbA > 0) lockR = Math.max(lockR, Math.min(G.lock * D2R, 0.42) * hbA);   // the handbrake still gets lock to swing the tail
+    }
+    S.delta = Math.sign(S.sIn) * S.sIn * S.sIn * lockR;
+    const cd = Math.cos(S.delta), sd = Math.sin(S.delta);
+
+    // ── pedals (as the 3D model) ──
+    {
+        const u0 = vx * Math.sin(yaw) + vz * Math.cos(yaw);
+        S.drive = 0; S.brake = 0;
+        const top = DRIVE_P.maxFwd * 1.05, rev = Math.abs(DRIVE_P.maxRev);
+        if(brk > 0){
+            if(u0 > 0.02){ S.brake = P.brake * brk * (1 - (1 - G.btBrake) * (CAR.brakeTurn || 0)); CAR.revHold = 0; }
+            else if(thr > 0){ CAR.revHold = 0; S.brake = P.brake * brk; }
+            else if(u0 < -0.02 || ++CAR.revHold > DRIVE_P.reverseDelay)
+                S.drive = -P.revDrive * brk * Math.max(0, 1 - (Math.max(0, -u0) / rev) ** 2);
+            else S.brake = P.brake * brk;
+        } else if(thr > 0){
+            CAR.revHold = 0;
+            if(u0 < -0.02) S.brake = P.brake * thr;
+            else S.drive = Math.max(0, P.drive * thr * (1 - (Math.max(0, u0) / top) ** 2) + thr * Math.max(0, u0) * P.coast)   /* S48d: never negative: above 1.05 × top (turbo) it was strong 'engine braking' on the rear, which threw the weight forward and spun the car */;
+        } else CAR.revHold = 0;
+    }
+
+    const n = P.sub, dt = 1 / n;
+    let dyaw = 0;
+    S.skid = S.skid || [false, false];
+    for(let k = 0; k < n; k++){
+        const fx = Math.sin(yaw), fz = Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+        const u = vx * fx + vz * fz;
+        const dN = P.wt * G.wtScale * P.g * Math.max(-1, Math.min(1, (S.ax || 0) / P.wtFull));   // S48g: × wtScale (less dive under braking)
+        const loads = [P.g * P.b / L - dN, P.g * P.a / L + dN];
+        const bias = [2 * G.tractionBias, 2 * (1 - G.tractionBias)];
+        let Fbx = 0; const skidding = S.skid[0] || S.skid[1];
+        for(let ax = 0; ax < 2; ax++){                   // 0 = front (steered), 1 = rear (driven, handbrake)
+            const d = ax === 0 ? P.a : -P.b;
+            const c = ax === 0 ? cd : 1, s = ax === 0 ? sd : 0;
+            // wheel axes in the world
+            const wfx = fx * c + rx * s, wfz = fz * c + rz * s;      // wheel forward (steered right by delta)
+            const wrx = rx * c - fx * s, wrz = rz * c - fz * s;      // wheel right
+            // contact patch velocity = body velocity + spin × offset (offset d along the heading)
+            const pvx = vx + S.w * d * rx, pvz = vz + S.w * d * rz;
+            const cl = pvx * wfx + pvz * wfz, ct = pvx * wrx + pvz * wrz;
+            // effective mass of the patch along each wheel axis (mass 1, inertia k2)
+            const Kt = 1 + (d * c) ** 2 / G.k2, Kl = 1 + (d * s) ** 2 / G.k2;
+            const C = Math.min(1, G.cancel * dt);
+            let Jt = -ct / Kt * C, Jl = 0;
+            // along the wheel: drive (rear), brakes, the handbrake's locked rear, rolling resistance
+            const brakeA = S.brake * (ax === 0 ? P.brakeF : 1 - P.brakeF) * dt;
+            const stopJ = -cl / Kl;                                    // the push that would stop the patch rolling
+            if(ax === 1 && hbA > 0.5){ Jl = stopJ * C; }                // locked: try to stop it, like sideways
+            else if(brakeA > 0){ Jl = Math.max(-brakeA, Math.min(brakeA, stopJ)); }
+            else if(ax === 1){ Jl = S.drive * dt; if(thr === 0) Jl += Math.max(-G.roll * dt, Math.min(G.roll * dt, stopJ)); }
+            // adhesion: the friction circle, with GTA's skid latch
+            const adh = mu * Math.max(0.15 * P.g, loads[ax]) * bias[ax] * dt;
+            const lim = (skidding || S.skid[0] || S.skid[1]) ? adh * G.tractionLoss : adh;   // GTA: once a wheel skids, every wheel has the lower grip
+            const lockedHard = ax === 1 && hbA > 0.5;
+            if(lockedHard){                                            // a locked wheel slides as one: its push is cut along its own line
+                const J = Math.hypot(Jt, Jl), lockLim = adh * (muBase / mu) * G.hbLockGrip[1];   // S48c: base grip, not the speed-raised one
+                S.skid[ax] = true;
+                if(J > lockLim){ Jt *= lockLim / J; Jl *= lockLim / J; }
+            } else {
+                // sideways grip first (so full throttle on a d-pad can't spin the car); along the wheel gets what is left
+                if(Math.abs(Jt) > lim){ S.skid[ax] = true; Jt = Math.sign(Jt) * adh * G.tractionLoss; }
+                else S.skid[ax] = false;
+                const room = G.longK * Math.sqrt(Math.max(0.1 * lim * lim, lim * lim - Jt * Jt));
+                if(brakeA > adh * G.longK && Math.abs(cl) > 0.005) S.skid[ax] = true;   // braked past its grip: locks
+                Jl = Math.max(-room, Math.min(room, Jl));               // wheelspin / lock-up beyond it
+            }
+            // apply at the patch
+            if(ax === 0 && u < 0){ const kbF = Math.max(0, Math.min(1, 1 - Math.hypot(vx, vz) / G.kinSpeed)); Jt *= 1 - kbF; Jl *= 1 - kbF; }   // S48g: reversing, the turn comes from the wheel geometry (below); the big-lock front tyre no longer drags the car to a crawl
+            const jx = Jl * wfx + Jt * wrx, jz = Jl * wfz + Jt * wrz;
+            vx += jx; vz += jz;
+            S.w += d * (fz * jx - fx * jz) / G.k2;                     // offset (d·f) × impulse
+            Fbx += (jx * fx + jz * fz) / dt;
+        }
+        S.ax = (S.ax || 0) + (Fbx - (S.ax || 0)) * 0.5;
+        { const dr = P.coast * dt; vx -= vx * dr; vz -= vz * dr; }   // S48d: air drag on the body - not through the rear tyres, not in the weight transfer (at turbo speed it threw the weight forward and spun the car)
+        // brakes / drag never push it backwards
+        const u2 = vx * fx + vz * fz;
+        if(S.drive === 0 && u2 * u < 0){ vx -= u2 * fx; vz -= u2 * fz; }
+        S.slipR = 0;
+        // S48g: at low speed the car follows its wheels (as the 3D model does): with big lock the stiff front tyre
+        // spends its grip as drag and the car ran wide. Fades out by kinSpeed.
+        { const u3 = vx * fx + vz * fz, kb = Math.max(0, Math.min(1, 1 - Math.hypot(vx, vz) / G.kinSpeed));
+          if(kb > 0){ const wK = u3 * Math.tan(S.delta) / L; S.w += (wK - S.w) * kb * G.kinBlend;
+            const vy3 = vx * rx + vz * rz; vx -= vy3 * kb * G.kinBlend * rx; vz -= vy3 * kb * G.kinBlend * rz;
+            if(kb > 0.5){ S.skid[0] = false; S.skid[1] = false; } } }
+        if(S.skid[1]) S.w *= 1 - G.turnDamp[1] * dt;   // only while the REAR slides (S48f: a sliding front - understeer - no longer damps the turn; fixed MEDIUM now there is no handbrake setting)
+        const dy = S.w * dt; yaw += dy; dyaw += dy;
+    }
+
+    // ── write back (as d3Physics) ──
+    vx /= tScale; vz /= tScale;                                       // S48d: back to the real (turbo) speed
+    let mag = Math.hypot(vx, vz);
+    const uN = vx * Math.sin(yaw) + vz * Math.cos(yaw);
+    let sgn = CAR.speed < 0 ? -1 : 1;
+    if(sgn > 0 && uN < -0.3 * mag) sgn = -1; else if(sgn < 0 && uN > 0.3 * mag) sgn = 1;
+    const base = DRIVE_P.maxFwd, topT = base + DRIVE_P.turboAdd;
+    if(sgn > 0 && mag > base){
+        mag = CAR.turbo ? Math.min(topT, Math.max(prevSpeed, base) + DRIVE_P.turboAccel)
+                        : Math.max(base, Math.min(mag, prevSpeed - DRIVE_P.turboFade));
+    }
+    if(mag < 0.003 && thr === 0 && !(brk > 0 && CAR.revHold > DRIVE_P.reverseDelay)){ mag = 0; S.w = 0; }
+    if(mag === 0){ CAR.speed = 0; CAR.velDir = CAR.yaw; }
+    else {
+        const dir = Math.atan2(vx, vz) / D2R + (sgn < 0 ? 180 : 0);
+        CAR.velDir = ((dir % 360) + 360) % 360;
+        CAR.speed = sgn * mag;
+    }
+    S.dyaw = dyaw / D2R;
+    S.last = mag;
+}
+
+// GTA's WellBufferMe: the value turns at a speed that eases towards (gap × topSpeed), closing speedStep of that
+// difference per tick. `ticks` = GTA ticks this frame.
+function gtaWellBuffer(target, st, key, topSpeed, speedStep, ticks){
+    let gap = target - st[key];
+    while(gap > Math.PI) gap -= 2 * Math.PI;
+    while(gap < -Math.PI) gap += 2 * Math.PI;
+    const want = gap * topSpeed, ks = key + 'Spd';
+    st[ks] = (st[ks] || 0) + (want - (st[ks] || 0)) * Math.min(1, speedStep * ticks);
+    st[key] += st[ks] * ticks;
+}
+
+// Camera on a string: sets CAM.yaw (deg). Called from updateChaseCamera() after the wrap.
+function camString(){
+    const S = d3State(), D2R = Math.PI / 180, F = carFoot(), mid = (F.f0 + F.f1) / 2, eye = mid + CHASE.back;
+    const r = CAR.yaw * D2R, cx = CAR.x + Math.sin(r) * mid, cz = CAR.z + Math.cos(r) * mid;   // the drawn car's centre
+    // how far the car moved since last frame (a jump - reset, respawn, wrap, load - uses its velocity instead)
+    let mx = cx - (S.cpx === undefined ? cx : S.cpx), mz = cz - (S.cpz === undefined ? cz : S.cpz);
+    const camJump = S.kpx !== undefined && Math.hypot(CAM.x - S.kpx, CAM.z - S.kpz) > 10;   // the wrap moves the camera with the car
+    let snap = false;
+    if(Math.hypot(mx, mz) > 10){
+        if(camJump){ const v = CAR.velDir * D2R; mx = Math.sin(v) * CAR.speed; mz = Math.cos(v) * CAR.speed; }   // wrap: carry on
+        else snap = true;                                                  // reset / load / walk back to the car: behind it
+    }
+    S.cpx = cx; S.cpz = cz;
+    if(snap){ S.beta = r; S.betaSpd = 0; CAM.yaw = CAR.yaw; S.kpx = CAM.x; S.kpz = CAM.z; return; }
+    // last frame's camera sat eye wu back along CAM.yaw: face the car from there
+    const cy = CAM.yaw * D2R, dx = mx + Math.sin(cy) * Math.abs(eye), dz = mz + Math.cos(cy) * Math.abs(eye);
+    S.beta = Math.hypot(dx, dz) > 1e-6 ? Math.atan2(dx, dz) : cy;
+    // driving forwards and more than swingDeg off the heading: swing round behind (buffered)
+    let gap = r - S.beta; while(gap > Math.PI) gap -= 2 * Math.PI; while(gap < -Math.PI) gap += 2 * Math.PI;
+    const fwd = Math.sin(r) * Math.sin(CAR.velDir * D2R) * CAR.speed + Math.cos(r) * Math.cos(CAR.velDir * D2R) * CAR.speed;
+    if(Math.abs(gap) > GTA.swingDeg * D2R && fwd > 0.02) gtaWellBuffer(r, S, 'beta', GTA.swingGain, GTA.swingAcc, GTA.tick);
+    else S.betaSpd = 0;
+    CAM.yaw = ((S.beta / D2R) % 360 + 360) % 360;
+    S.kpx = CAM.x; S.kpz = CAM.z;
 }
 
 function updateCar(){
     // ── Gather input: keyboard first, then merge the gamepad on top ──
     INPUT.steer = 0; INPUT.throttle = 0; INPUT.brakeRev = 0;
     INPUT.handbrake = false; INPUT.reset = false; INPUT.turbo = false;
-    if(keys['a']||keys['arrowleft'])  INPUT.steer -= 1;
-    if(keys['d']||keys['arrowright']) INPUT.steer += 1;
-    if(keys['w']||keys['arrowup'])    INPUT.throttle = 1;
-    if(keys['s']||keys['arrowdown'])  INPUT.brakeRev = 1;
-    if(keys['shift'])                 INPUT.handbrake = true;  // keyboard handbrake
-    if(keys[' '])                     INPUT.turbo = true;      // S35: Space = turbo
+    if(keys['o']||keys['arrowleft'])  INPUT.steer -= 1;      // S48l: O / P steer, Q accelerate, A brake (was WASD)
+    if(keys['p']||keys['arrowright']) INPUT.steer += 1;
+    if(keys['q']||keys['arrowup'])    INPUT.throttle = 1;
+    if(keys['a']||keys['arrowdown'])  INPUT.brakeRev = 1;
     if(keys['r'])                     INPUT.reset = true;      // S35: R = reset (was Space)
     readGamepad();
+    if(keys[' '])                     INPUT.turbo = true;      // S48r: Space = turbo again (S48m's double tap retired)
     ACCEL_SND.drove = true;   // S29: the acceleration sound only plays while the car is driven
 
     // ── reset (R / pad B) — snap back to spawn, clear all motion ──
     if(INPUT.reset){
         CAR.x=CAR.startX; CAR.z=CAR.startZ; CAR.yaw=CAR.startYaw;
         CAR.speed=0; CAR.velDir=CAR.startYaw; CAR.revHold=0; CAR.hbAmt=0; CAR.steerSm=0; CAR.turbo=false;
-        CAR.wreck=null; CAR.modelYaw=0; CAR.energy=ENERGY.start; CAR.hitGrace=0; CAR.skidX=0; CAR.skidZ=0; CAR.bumpPX=undefined;   // S36: reset = a fresh car at the start
+        CAR.wreck=null; CAR.modelYaw=0; CAR.energy=ENERGY.start; CAR.hitGrace=0; CAR.skidX=0; CAR.skidZ=0; CAR.brakeTurn=0; CAR.bumpPX=undefined;   // S36: reset = a fresh car at the start
         return;
     }
 
@@ -1861,6 +2432,8 @@ function updateCar(){
     CAR.turbo = turbo;
     if(turbo) INPUT.throttle = 1;
     const prevSpeed = CAR.speed;
+    if(DRIVE3D.on){ if(DRIVE3D.model === 'gta') gtaPhysics(hb, Math.abs(prevSpeed)); else d3Physics(hb, Math.abs(prevSpeed)); }   // S48a / S48b
+    else {
     // S35: the brake wins when both pedals are held. Going forwards it brakes;
     // stopped (or reversing) with both held, the car just holds still.
     if(INPUT.brakeRev>0){
@@ -1892,6 +2465,7 @@ function updateCar(){
                 : Math.max(base, Math.min(CAR.speed, prevSpeed - DRIVE_P.turboFade));
         }
         CAR.speed = Math.max(DRIVE_P.maxRev, Math.min(top, CAR.speed));
+    }
     }
 
     // ── off road (S36): past the pavement edge the car tops out at 40 mph ──
@@ -1955,7 +2529,8 @@ function updateCar(){
     let modelTarget, modelEase;
 
     const yawPrev = CAR.yaw, velPrev = CAR.velDir;   // S39: to undo a turn into a wall
-    if(CAR.speed < 0){
+    if(DRIVE3D.on){ d3Turn(); modelTarget = CAR.modelYaw; modelEase = 0; }   // S48a: physics turn; the camera sets the sprite
+    else if(CAR.speed < 0){
         // ── REVERSE: like a real car. Right lock swings the nose LEFT; turn rate
         // scales with speed (constant radius), no sideways crab.
         const revFac = Math.min(1, spd / Math.abs(DRIVE_P.maxRev));
@@ -1990,12 +2565,12 @@ function updateCar(){
         const F = carFoot(), r = CAR.yaw*Math.PI/180, mid = (F.f0 + F.f1)/2;
         // S43: turn about the drawn car's rear axle (piv along the heading from
         // CAR.x/z, negative = behind), not about CAR.x/z ~12 m in front of it.
-        const piv = F.f0 + (F.f1 - F.f0) * DRIVE_P.pivotAt, r0 = yawPrev*Math.PI/180;
+        const piv = DRIVE3D.on ? mid : F.f0 + (F.f1 - F.f0) * DRIVE_P.pivotAt, r0 = yawPrev*Math.PI/180;   // S48a: 3D turns about the centre
         const nx = CAR.x + (Math.sin(r0) - Math.sin(r)) * piv;
         const nz = CAR.z + (Math.cos(r0) - Math.cos(r)) * piv;
         const cand = collideCandidates(nx + Math.sin(r)*mid, nz + Math.cos(r)*mid, 6);
         const pNew = carPen(nx, nz, CAR.yaw, F, cand);
-        if(pNew > COLL.turnSlack && pNew > carPen(CAR.x, CAR.z, yawPrev, F, cand) + 1e-6){ CAR.yaw = yawPrev; CAR.velDir = velPrev; }
+        if(pNew > COLL.turnSlack && pNew > carPen(CAR.x, CAR.z, yawPrev, F, cand) + 1e-6){ CAR.yaw = yawPrev; if(DRIVE3D.on) d3State().w = 0; else CAR.velDir = velPrev; }
         else { CAR.x = nx; CAR.z = nz; }
     }
 
@@ -2500,7 +3075,7 @@ function turboFx(){
         for(let i = P.length - 1; i >= 0; i--) if(P[i].kind === 'turbo') P.splice(i, 1);
     }
     const fire = !!(CAR.wreck && CAR.wreck.type === 'fire');
-    const dirt = CAR.offRoad && !CAR.wreck && Math.abs(CAR.speed) > 0.03;
+    const dirt = (CAR.offRoad || (CAR.brakeTurn || 0) > 0.5) && !CAR.wreck && Math.abs(CAR.speed) > 0.03;   // S48k: + brake-turn skid flecks
     if(TFX.amt < 0.05 && !fire && !dirt && !P.length) return;
     const X1 = VIEW_X1, Y1 = DASHBOARD_Y - 1;
     let a = -CAR.modelYaw; a = ((a % 360) + 360) % 360;
@@ -2614,9 +3189,11 @@ function updateChaseCamera(){
     // normal driving (they match); in a handbrake slide the view stays on the
     // line of travel and the car sprite shows the real slip angle against it.
     // S43: ease the yaw first, then orbit the drawn car (see pivot_patch.py)
-    let dyaw = ((CAR.velDir - CAM.yaw + 540) % 360) - 180;
-    CAM.yaw = (CAM.yaw + dyaw * CHASE.yawLag + 360) % 360;
-    const yawR = CAR.velDir * Math.PI/180, camR = CAM.yaw * Math.PI/180;
+    const d3c = DRIVE3D.on && !CAR.wreck;   // S48a: 3D camera behind the nose, orbiting the real centre
+    if(d3c && CAMSTR.on) camString();   // S48b: GTA III camera on a string
+    else { const dyaw = (((d3c ? d3CamYaw() : CAR.velDir) - CAM.yaw + 540) % 360) - 180;
+    CAM.yaw = (CAM.yaw + dyaw * CHASE.yawLag + 360) % 360; }
+    const yawR = (d3c ? CAR.yaw : CAR.velDir) * Math.PI/180, camR = CAM.yaw * Math.PI/180;
     const F = carFoot(), mid = (F.f0 + F.f1)/2, eye = mid + CHASE.back;   // eye→drawn car centre
     // S46o: the sprite is drawn CARV.dx px left of the optical centre, so sit the camera that far to the RIGHT
     // (at the drawn car's distance): the car's real position then projects exactly under its sprite.
@@ -2633,6 +3210,7 @@ function updateChaseCamera(){
     const targetCamY = groundHeightAt(CAM.x, CAM.z) + CHASE.height;
     CAM.y += (targetCamY - CAM.y) * 0.35;
     CAM.pitch = CHASE.pitch;
+    if(DRIVE3D.on) d3Sprite();   // S48a
 }
 
 // ─── Pixel buffer ────────────────────────────────────────────────────────────
@@ -5942,7 +6520,7 @@ let CS = { phase:'idle', typed:['','','',''], line:0, ch:0,
 let CS_PADSEL = null;
 let csTimer = null, csRAF = null;
 
-const GAME_VERSION = 'V1.0';   // S47o: shown bottom-left of SELECT A CITY
+const GAME_VERSION = 'V1.1';   // S47o: shown bottom-left of SELECT A CITY
 function csVersion(){            // 3x5 font, black ink on the green paper
     cctx.fillStyle = CS_BLACK;
     let x = 2; const y = 192 - 7;
@@ -6743,7 +7321,7 @@ loadFileInput.addEventListener('change', e=>{
         try {
             const snap = JSON.parse(reader.result);
             loadSnapshot(snap);
-            learnerAsk(yes=>{ showGame(); if(yes) learnerStart(); }, false);   // S47l: straight into Cruise: ask
+            showGame();   // S48n: straight into Cruise (no learner question)
         } catch(err){
             console.error('[load] failed:', err);
             alert('Could not read that file as a build snapshot. See console.');
@@ -6846,7 +7424,7 @@ async function worldLoadFile(file){
         const url = WORLD_PUBLIC.replace(/\/$/,'') + '/' + encodeURIComponent(file);
         const snap = await fetchJSON(url, { headers:{'Accept':'application/json'} });
         loadSnapshot(snap);        // switches to the game screen on success
-        learnerAsk(yes=>{ showGame(); if(yes) learnerStart(); }, false);   // S47l: straight into Cruise: ask
+        showGame();   // S48n: straight into Cruise (no learner question)
     } catch(err){
         worldDone();
         console.error('[world load] failed:', err);
@@ -8245,11 +8823,10 @@ function ctrlPaint(){
     ctLabel('TURBO',     25, 7, 198, 59, PAD_MAP.turbo);    // S35: X
     ctLabel('RESET',      1, 13,  44, 107, PAD_MAP.reset);   // S47k: BACK, left of START
     // below the pad
-    ctLabel('HANDBRAKE', 22, 17, 200, 135, PAD_MAP.handbrake);
     ctLabel('OPTIONS',    8, 17, 100, 135, PAD_MAP.options);
     // keyboard
-    zxCentre(sctx, 'KEYS: W A S D OR ARROWS', 19, CT_BLACK, CT_YELLOW);
-    zxCentre(sctx, 'SHIFT HANDBRAKE  SPACE TURBO', 20, CT_BLACK, CT_YELLOW);
+    zxCentre(sctx, 'KEYS: Q A O P OR ARROWS', 19, CT_BLACK, CT_YELLOW);
+    zxCentre(sctx, 'SPACE TURBO', 20, CT_BLACK, CT_YELLOW);
     zxCentre(sctx, sat ? 'E/Y IN/OUT  R RESET  ESC OPTIONS' : 'Y IN/OUT  R RESET  ESC OPTIONS', 21, CT_BLACK, CT_YELLOW);
     if(STEPS.blink < 20){
         const prompt = PAD_USED ? 'PRESS A' : 'PRESS ANY KEY';
@@ -8294,12 +8871,11 @@ function modeShow(fromEmbed){
 function modePick(n){
     if(!MODE.open || performance.now() - MODE.shownAt < 250) return;
     if(MODE.page==='learn'){ learnerAnswer(n===1); return; }   // S47l: LEARNER MODE? 1 YES / 2 NO
-    if(n===1){ learnerAsk(yes=>{ CTRL_MODE = 1; stepsShow(()=>{ showGame(); if(yes) learnerStart(); }, ctrlPaint); }, true); return; }
     MODE.open = false;
     stepsEl.style.display = 'none';
-    // S28: the CONTROLS screen, then the drive (Saturday Night: then its briefing)
+    // S48n: straight into the drive (Saturday Night: then its briefing). No LEARNER MODE? question, no CONTROLS screen.
     CTRL_MODE = n;
-    stepsShow(()=>{ showGame(); if(n===2) snmStart(); }, ctrlPaint);
+    showGame(); if(n===2) snmStart();
 }
 function modeBack(){
     if(!MODE.open) return;
@@ -8516,7 +9092,7 @@ function learnerNearBend(){
 
 function learnerNext(){
     const L = LEARN; if(!L) return;
-    L.step++; L.hold = 0;
+    L.step++; L.hold = 0; if(L.step === 1) L.step = 3;   // S48f: no handbrake lessons
     if(L.step === 3){ CAR.energy = Math.max(CAR.energy, 1); }   // a full meter for the turbo lesson
 }
 
@@ -8655,7 +9231,7 @@ function learnerOverlay(){
     if(L.pass > 0){ head('WELL DONE!'); return; }
     if(L.step === 0){
         head('LESSON 1: STEERING');
-        lines([pad ? 'LEFT STICK' : 'A / D'], 11);
+        lines([pad ? 'LEFT STICK' : 'O / P'], 11);
         if(L.left  < LEARN_TUNE.steerFrames) chevron(true, 44);
         if(L.right < LEARN_TUNE.steerFrames) chevron(false, 44);
     } else if(L.step === 1 || L.step === 2){
@@ -8665,7 +9241,7 @@ function learnerOverlay(){
         lines([L.bend ? (L.step === 1 ? 'BEND - TAP IT AS YOU STEER' : 'BEND - HOLD IT AS YOU STEER') : 'WAIT FOR THE BEND'], 19, L.bend ? WH : Y);
         hint(false, 'handbrake', 'HANDBRAKE', 'SHIFT', !L.bend);
     } else if(L.step === 3){
-        head('LESSON 3: TURBO');
+        head('LESSON 2: TURBO');
         lines([CAR.energy < 0.1 ? 'METER LOW - LET GO' : 'AT TOP SPEED, HOLD IT'], 11, CAR.energy < 0.1 ? '#FF4040' : Y);
         hint(true, 'turbo', 'TURBO', 'SPACE');
         meterArrow();
@@ -10594,10 +11170,10 @@ function snmTimerFrac(kind){
 function snmWalk(){
     const W=SNM.walker, T=SNM_TUNE;
     let fwd=0, turn=0;
-    if(keys['w']||keys['arrowup'])    fwd+=1;
-    if(keys['s']||keys['arrowdown'])  fwd-=1;
-    if(keys['a']||keys['arrowleft'])  turn-=1;
-    if(keys['d']||keys['arrowright']) turn+=1;
+    if(keys['q']||keys['arrowup'])    fwd+=1;    // S48l: Q A O P
+    if(keys['a']||keys['arrowdown'])  fwd-=1;
+    if(keys['o']||keys['arrowleft'])  turn-=1;
+    if(keys['p']||keys['arrowright']) turn+=1;
     const gp=snmPad();
     if(gp){
         const dz=v=>Math.abs(v)<0.2?0:v;
@@ -10684,8 +11260,8 @@ document.addEventListener('keydown', e=>{
     if(SNM.screen){
         if(k==='escape' && !snmScreenBack()) return;       // unhandled Esc → options
         if(e.repeat){ e.preventDefault(); e.stopImmediatePropagation(); return; }
-        if(k==='arrowleft'||k==='a'||k==='arrowup'||k==='w')          snmScreenMove(-1);
-        else if(k==='arrowright'||k==='d'||k==='arrowdown'||k==='s')  snmScreenMove(1);
+        if(k==='arrowleft'||k==='o'||k==='arrowup'||k==='q')          snmScreenMove(-1);   // S48l: Q A O P
+        else if(k==='arrowright'||k==='p'||k==='arrowdown'||k==='a')  snmScreenMove(1);
         else if(k==='e'||k==='enter'||k===' ')                        snmScreenOk();
         e.preventDefault(); e.stopImmediatePropagation();
         return;
@@ -11100,7 +11676,7 @@ function snmScrBrief(){
     snmRect(16,130,224,1,K);
     snmText8C('E OR PAD Y: GET OUT, GET IN', 136, K, null);
     snmText8C('AND USE DOORS', 145, K, null);
-    snmText8C('ARROWS OR WASD: DRIVE, WALK', 154, K, null);
+    snmText8C('ARROWS OR QAOP: DRIVE, WALK', 154, K, null);
     snmLine('PRESS E TO START', 169, snmFlash(), 8, 248);
     snmText8C('ESC: BACK TO CRUISING', 184, K, null);
 }
@@ -12637,7 +13213,6 @@ const PAD_MAP = { handbrake:0, turbo:2, reset:8, options:9, throttle:7, brake:6 
 const PAD_NAMES = ['A','B','X','Y','LB','RB','LT','RT','BACK','START',
                    'L-STICK','R-STICK','UP','DOWN','LEFT','RIGHT'];
 const REMAPPABLE = [
-    { key:'handbrake', label:'HANDBRAKE' },
     { key:'turbo',     label:'TURBO'     },
     { key:'reset',     label:'RESET'     },
     { key:'options',   label:'OPTIONS'   },
@@ -12743,10 +13318,8 @@ const OPT_ADV = [
       left:()=>{JUNC.SNIP_ROAD=!JUNC.SNIP_ROAD;}, right:()=>{JUNC.SNIP_ROAD=!JUNC.SNIP_ROAD;} },
     { label:'DEBUG INFO', value:()=>(SHOW_DEBUG?'ON':'OFF'),
       left:()=>{SHOW_DEBUG=!SHOW_DEBUG;}, right:()=>{SHOW_DEBUG=!SHOW_DEBUG;} },
-    { label:'HANDBRAKE TURN',  value:()=>HANDBRAKE_LEVELS.turn.names[HB_SET.turn],
-      left:()=>hbSetStep('turn',-1),  right:()=>hbSetStep('turn',1) },
-    { label:'HANDBRAKE SPEED', value:()=>HANDBRAKE_LEVELS.speed.names[HB_SET.speed],
-      left:()=>hbSetStep('speed',-1), right:()=>hbSetStep('speed',1) },
+    { label:'DRIVING', value:()=>DRIVE_NAMES[DRIVE3D.model || 'gta'], left:()=>driveModeStep(-1), right:()=>driveModeStep(1) },   // S48b
+    { label:'CAMERA',  value:()=>(CAMSTR.on?'STRING':'CHASE'), left:()=>camModeToggle(), right:()=>camModeToggle() },   // S48b
     { label:'CONTROLS',  act:()=>{ OPTS.page='keys';  OPTS.sel=0; optsPaint(); } },
     { label:'INPUTS',    act:()=>{ OPTS.page='input'; OPTS.sel=0; optsPaint(); } },
     { label:'JUNCTIONS', act:()=>{ optsClose(); jedOpen(); } },
@@ -12791,10 +13364,9 @@ function optsPage(){
 // first, dev tools second. Rendered as static text, not selectable rows, so the
 // only navigable item is BACK.
 const KEY_HELP = [
-    ['W / UP',    'ACCELERATE'],
-    ['S / DOWN',  'BRAKE, REVERSE'],
-    ['A / D',     'STEER'],
-    ['SHIFT',     'HANDBRAKE'],
+    ['Q / UP',    'ACCELERATE'],
+    ['A / DOWN',  'BRAKE, REVERSE'],
+    ['O / P',     'STEER'],
     ['SPACE',     'TURBO'],
     ['R',         'RESET CAR'],
     ['ESC',       'OPTIONS'],
@@ -12953,10 +13525,10 @@ document.addEventListener('keydown', e=>{
         return;
     }
     const k = e.key.toLowerCase();
-    if(k==='arrowup'   || k==='w') optsMove(-1);
-    else if(k==='arrowdown' || k==='s') optsMove(1);
-    else if(k==='arrowleft' || k==='a') optsAdjust(-1);
-    else if(k==='arrowright'|| k==='d') optsAdjust(1);
+    if(k==='arrowup'   || k==='q') optsMove(-1);      // S48l: Q A O P
+    else if(k==='arrowdown' || k==='a') optsMove(1);
+    else if(k==='arrowleft' || k==='o') optsAdjust(-1);
+    else if(k==='arrowright'|| k==='p') optsAdjust(1);
     else if(k==='enter' || k===' ')     optsActivate();
     else if(k==='escape'){
         if(OPTS.page==='input' || OPTS.page==='keys'){ OPTS.page='adv';  OPTS.sel=0; optsPaint(); }
@@ -13133,13 +13705,125 @@ if(IS_TOUCH){
         if(jd) jd.style.zoom = Math.min(1, window.innerWidth/1010);
     };
     fitWide(); window.addEventListener('resize', fitWide);
-    const padNote = $('tp-pad');
     const padConnected = () => !!padPick();   // S43c: a real controller, not a sensor
     setInterval(()=>{
+        zxKeysBuild();   // (built on the first tick: ZXKEYS is declared further down)
         const driving = MAP_LOADED && gameEl.style.display!=='none';
         document.body.classList.toggle('driving', driving);
-        padNote.style.display = (driving && !padConnected()) ? 'block' : 'none';
+        const on = driving && !padConnected() && !(typeof OPTS !== 'undefined' && OPTS.open);
+        if(!on && document.body.classList.contains('zxkeys-on')) zxKeysRelease();
+        document.body.classList.toggle('zxkeys-on', on);   // S48l: on-screen keys instead of "CONNECT A CONTROLLER"
     }, 150);
+}
+// ─── S48l/S48m: PHONE KEYS ──────────────────────────────────────────────────────────────────────────
+// ZX Spectrum keys drawn as 8-bit monochrome art (Spectrum grey + black, ROM font, dithered shadow): the letter, the
+// Spectrum's keyword (Q PLOT, A NEW, O POKE, P PRINT) and an inverse strip saying what the key does here. Pressed =
+// inverse video, pushed down a pixel. A held key sets keys[] exactly as the keyboard does; each finger is tracked and
+// can slide between keys (O <-> P to weave). Turbo: double tap Q (S48m: no SPACE key).
+const ZXKEYS = [
+    { id:'zk-q',   key:'q', cap:'Q',   word:'PLOT',  act:'ACCEL' },
+    { id:'zk-a',   key:'a', cap:'A',   word:'NEW',   act:'BRAKE' },
+    { id:'zk-o',   key:'o', cap:'O',   word:'POKE',  act:'LEFT' },
+    { id:'zk-p',   key:'p', cap:'P',   word:'PRINT', act:'RIGHT' },
+    { id:'zk-t',   key:' ', also:'q', cap:'SPACE', word:'BREAK', act:'TURBO', cls:'wide' },   // S48r: above O P
+    { id:'zk-e',   tap:'y', cap:'E',   act:'IN/OUT', cls:'small' },
+    { id:'zk-brk', tap:'Escape', cap:'BRK', act:'OPTIONS', cls:'small' },
+];
+const ZXK = { fingers:{}, els:{}, built:false };
+const ZXK_GREY = '#C0C0C0', ZXK_INK = '#000000';
+function zxKeyArt(k, down){
+    const small = k.cls === 'small', w = small ? 62 : (k.cls === 'wide' ? 102 : 46), h = small ? 34 : 44;
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.className = down ? 'dn' : 'up';
+    const c = cv.getContext('2d'), body = down ? ZXK_INK : ZXK_GREY, ink = down ? ZXK_GREY : ZXK_INK, dy = down ? 1 : 0;
+    const px = (x, y, col) => { c.fillStyle = col; c.fillRect(x, y, 1, 1); };
+    const text = (str, x, y, sc, col) => { for(let i = 0; i < str.length; i++){ const g = ZXFONT[str[i]] || ZXFONT[' '];
+        for(let r = 0; r < 8; r++) for(let b = 0; b < 8; b++) if((g[r] >> (7 - b)) & 1){ c.fillStyle = col; c.fillRect(x + (i * 8 + b) * sc, y + r * sc, sc, sc); } } };
+    const kh = h - 3;                                       // key face height; 3 rows of shadow under it when up
+    // dithered drop shadow (not when pressed: the key sits down on it)
+    if(!down) for(let y = kh - 2; y < h; y++) for(let x = 2; x < w; x++) if((x + y) & 1) px(x, y, ZXK_INK);
+    // face: rounded (corners cut), black outline
+    c.fillStyle = down ? ZXK_GREY : ZXK_INK; c.fillRect(1, dy, w - 2, kh); c.fillRect(0, dy + 1, w, kh - 2);   // pressed: grey rim, inverse face
+    c.fillStyle = body; c.fillRect(2, dy + 1, w - 4, kh - 2); c.fillRect(1, dy + 2, w - 2, kh - 4);
+    // a 1-px dithered inner bevel on the right and bottom edges (8-bit depth)
+    for(let y = dy + 3; y < dy + kh - 2; y++) if(y & 1) px(w - 3, y, ink);
+    for(let x = 3; x < w - 2; x++) if(x & 1) px(x, dy + kh - 3, ink);
+    if(small){
+        text(k.cap, Math.round((w - k.cap.length * 16) / 2), dy + 3, 2, ink);
+        c.fillStyle = ink; c.fillRect(2, dy + kh - 11, w - 4, 9);
+        text(k.act, Math.round((w - k.act.length * 8) / 2), dy + kh - 10, 1, body);
+    } else {
+        text(k.cap, 4, dy + 3, 2, ink);                                     // the letter, top left
+        text(k.word, w - 4 - k.word.length * 8 > 21 ? w - 4 - k.word.length * 8 : 4, dy + 21, 1, ink);   // keyword (PRINT is wide: left)
+        c.fillStyle = ink; c.fillRect(2, dy + kh - 12, w - 4, 10);          // inverse strip: what it does here
+        text(k.act, Math.round((w - k.act.length * 8) / 2), dy + kh - 11, 1, body);
+    }
+    return cv;
+}
+function zxKeysBuild(){
+    if(ZXK.built) return; ZXK.built = true;
+    const box = document.createElement('div'); box.id = 'zxkeys';
+    for(const k of ZXKEYS){
+        const el = document.createElement('div'); el.id = k.id; el.className = 'zxk' + (k.cls ? ' ' + k.cls : '');
+        el.appendChild(zxKeyArt(k, false)); el.appendChild(zxKeyArt(k, true));
+        el.dataset.k = k.id; box.appendChild(el); ZXK.els[k.id] = el;
+    }
+    document.body.appendChild(box);
+    const keyAt = (t) => { const el = document.elementFromPoint(t.clientX, t.clientY); const k = el && el.closest && el.closest('.zxk'); return k ? k.dataset.k : null; };
+    const def = id => ZXKEYS.find(k => k.id === id);
+    const tap = name => { for(const type of ['keydown', 'keyup']) document.dispatchEvent(new KeyboardEvent(type, { key:name, bubbles:true })); };
+    const sync = () => {
+        const held = new Set(Object.values(ZXK.fingers).filter(Boolean));
+        for(const k of ZXKEYS){ if(!k.key) continue; const on = held.has(k.id); keys[k.key] = on; ZXK.els[k.id].classList.toggle('on', on); }
+        for(const k of ZXKEYS) if(k.also && held.has(k.id)) keys[k.also] = true;   // S48r: TURBO holds Q too
+    };
+    const down = e => { e.preventDefault(); zxFullscreen();
+        for(const t of e.changedTouches){ const id = keyAt(t); ZXK.fingers[t.identifier] = id;
+            const d = id && def(id); if(d && d.tap){ ZXK.els[id].classList.add('on'); tap(d.tap); } }
+        sync(); };
+    const move = e => { e.preventDefault(); for(const t of e.changedTouches){ if(!(t.identifier in ZXK.fingers)) continue; const id = keyAt(t), d = id && def(id);
+        if(d && d.tap) continue; ZXK.fingers[t.identifier] = id; } sync(); };
+    const up = e => { e.preventDefault(); for(const t of e.changedTouches){ const id = ZXK.fingers[t.identifier]; if(id && def(id).tap) ZXK.els[id].classList.remove('on'); delete ZXK.fingers[t.identifier]; } sync(); };
+    box.addEventListener('touchstart', down, { passive:false });
+    box.addEventListener('touchmove', move, { passive:false });
+    box.addEventListener('touchend', up, { passive:false });
+    box.addEventListener('touchcancel', up, { passive:false });
+    box.addEventListener('contextmenu', e => e.preventDefault());
+}
+function zxKeysRelease(){
+    ZXK.fingers = {};
+    for(const k of ZXKEYS){ if(k.key) keys[k.key] = false; if(k.also) keys[k.also] = false; if(ZXK.els[k.id]) ZXK.els[k.id].classList.remove('on'); }
+}
+// Landscape only: Android can lock the orientation once the page is full screen (asked on the first tap); other
+// phones show the "turn your phone" screen in portrait (CSS).
+function zxFullscreen(){
+    if(ZXK.fsTried) return; ZXK.fsTried = true;
+    try {
+        const de = document.documentElement, req = de.requestFullscreen || de.webkitRequestFullscreen;
+        const lock = () => {};   // S48r: no orientation lock - upright is a supported layout
+        if(req && !document.fullscreenElement){ const p = req.call(de); if(p && p.then) p.then(lock).catch(()=>{}); else lock(); } else lock();
+    } catch(e){}
+}
+if(IS_TOUCH){
+    const r = document.createElement('div'); r.id = 'zxrotate';
+    const l1 = zxLabelCanvas('TURN YOUR PHONE', 3, '#FFFFFF', 'transparent'), l2 = zxLabelCanvas('SIDEWAYS TO PLAY', 3, '#FFFFFF', 'transparent');
+    const ph = document.createElement('canvas'); ph.width = 48; ph.height = 32;   // a phone on its side, Spectrum colours
+    { const c = ph.getContext('2d'); c.fillStyle = '#00C0C0'; c.fillRect(2, 4, 44, 24); c.fillStyle = '#000'; c.fillRect(6, 7, 34, 18); c.fillStyle = '#C0C000'; c.fillRect(42, 14, 2, 4); }
+    ph.style.width = '144px'; l1.style.width = 'min(80vw, 360px)'; l2.style.width = 'min(80vw, 384px)';
+    const l3 = zxLabelCanvas('ROTATION LOCK ON?', 2, '#C0C0C0', 'transparent'), l4 = zxLabelCanvas('TURN IT OFF IN CONTROL CENTRE', 2, '#C0C0C0', 'transparent');
+    l3.style.width = 'min(60vw, 272px)'; l4.style.width = 'min(86vw, 464px)'; l3.style.marginTop = '14px';
+    r.append(ph, l1, l2, l3, l4); document.body.appendChild(r);   // S48o
+    document.addEventListener('touchend', zxFullscreen, { once:true, passive:true });
+    // S48q: tap = click at once on the menu screens (in-app viewers may never send the click)
+    const tapNow = el => { if(!el) return;
+        el.addEventListener('touchstart', e => {
+            if(e.touches.length !== 1) return;
+            const t = e.touches[0]; e.preventDefault();          // no scroll / zoom, and no second (browser) click
+            el.dispatchEvent(new MouseEvent('click', { bubbles:true, cancelable:true, clientX:t.clientX, clientY:t.clientY, view:window }));
+        }, { passive:false }); };
+    ['title', 'city-canvas', 'steps', 'opts-canvas', 'c'].forEach(id => tapNow(document.getElementById(id)));
+    document.addEventListener('touchstart', e => {   // the title: a tap anywhere starts (upright, the picture is only the top)
+        if(typeof TITLE !== 'undefined' && !TITLE.done){ e.preventDefault(); titleDismiss(); } }, { passive:false, capture:true });
+    document.addEventListener('touchend', () => { try { accelSndInit(); } catch(e){} }, { passive:true });
 }
 
 // ── Controller test (S43c): open the page as index.html?pad ──────────────────
@@ -13226,8 +13910,8 @@ window.addEventListener('keydown', e => {
     if(!MANUAL.open) return;
     const k = e.key;
     if(k === 'Escape' || k === 'x' || k === 'X') manualClose();
-    else if(k === 'ArrowRight' || k === 'd' || k === 'D' || k === ' ' || k === 'PageDown') manualGo(1);
-    else if(k === 'ArrowLeft' || k === 'a' || k === 'A' || k === 'PageUp') manualGo(-1);
+    else if(k === 'ArrowRight' || k === 'p' || k === 'P' || k === ' ' || k === 'PageDown') manualGo(1);
+    else if(k === 'ArrowLeft' || k === 'o' || k === 'O' || k === 'PageUp') manualGo(-1);
     else if(k === 'Home') { MANUAL.page = 0; manualShowPage(); }
     e.preventDefault(); e.stopImmediatePropagation();
 }, true);
