@@ -6,7 +6,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Turbo Spirit</title>
+<title>Turbo Spirit — Xmas Edition</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 /* ZX Spectrum loading border: a ~1-inch band hugging the active screen (like the
@@ -387,6 +387,429 @@ const COL = {
     GREY2:  [0xd0,0xd0,0xd0],   // light grey: building FRONT face (solid, not hollow)
     GREYD:  [0x78,0x78,0x78],   // dark grey: building SIDE face (shaded)
 };
+// ═══════════════════════════════════════════════════════════════════════════
+//  XMAS EDITION
+//  The world stays the game's own monochrome (greys shown as black/white
+//  dithers, as a Spectrum would); only the sky turns black. The colour comes
+//  from Christmas lights, Rudolph and Father Christmas. Father Christmas gets
+//  true 48K colour clash (8x8 cells, ONE ink + ONE paper + BRIGHT, xmClash);
+//  the lights are clean single bulbs (an optional soft clash, xmGlow, is
+//  available via XMAS.glow but off by default).
+//    • black sky with white stars (fixed to compass bearings, they pan as you turn)
+//    • yellow icicle lights hanging from house gutters
+//    • twinkling lights + a star on the trees
+//    • a light snow shower, drawn OVER 1 (XOR) like a Spectrum sprite
+//    • Father Christmas, Rudolph and a reindeer cross the sky now and then
+// ═══════════════════════════════════════════════════════════════════════════
+const XMAS = {
+    on: true,
+    clash: true,             // full 8x8 attribute clash on Father Christmas (only)
+    glow:  0,                // lights: soft clash (off) - tint the ink pixels in their own NxN block (0 = off, 8 = full cells)
+    santaFirst:   12000,     // ms before the first fly-past
+    santaGapMin:  45000,     // ms between fly-pasts (random in min..max)
+    santaGapMax:  80000,
+    santaSpeed:   13,        // degrees of sky per second
+    flakes:       60,        // a light shower
+};
+const XC = {   // the Spectrum palette (normal 0xC0, BRIGHT 0xFF)
+    K:[0,0,0],       B:[0,0,0xC0],    R:[0xC0,0,0],    M:[0xC0,0,0xC0],
+    G:[0,0xC0,0],    C:[0,0xC0,0xC0], Y:[0xC0,0xC0,0], W:[0xC0,0xC0,0xC0],
+    BB:[0,0,0xFF],   BR:[0xFF,0,0],   BM:[0xFF,0,0xFF], BG:[0,0xFF,0],
+    BC:[0,0xFF,0xFF], BY:[0xFF,0xFF,0], BW:[0xFF,0xFF,0xFF],
+};
+const XM_TREE_LIGHTS = [XC.BR, XC.BY, XC.BM, XC.BC, XC.BG];
+function xmStep(){ return Math.floor(performance.now() / 320); }   // the Spectrum's FLASH rate (16 frames at 50 Hz)
+
+// Spectrum colour code: ink/paper number 0-7 (bit0 blue, bit1 red, bit2 green) + 8 for BRIGHT
+function xmCode(c){ return (c[2] ? 1 : 0) | (c[0] ? 2 : 0) | (c[1] ? 4 : 0) | ((c[0] | c[1] | c[2]) === 255 ? 8 : 0); }
+const XM_RGB = []; for(let k = 0; k < 16; k++){ const l = (k & 8) ? 255 : 0xC0; XM_RGB.push([(k & 2) ? l : 0, (k & 4) ? l : 0, (k & 1) ? l : 0]); }
+
+// Light pixels this frame (code + 1). In the attribute pass they win their cell's INK.
+const XLB = new Uint8Array(W * H);
+function xmMark(x, y, c){
+    if(x < 0 || x >= W || y < 0 || y >= H) return;
+    const i = y*W + x, q = i << 2;
+    if(D[q] === c[0] && D[q+1] === c[1] && D[q+2] === c[2]) XLB[i] = xmCode(c) + 1;   // only if it was actually drawn
+}
+// one depth-tested light (w = 1/depth), hidden by road / ground in front like the scenery
+function xmDot(x, y, c, w){ x |= 0; y |= 0; if(w > 0){ ZPL = 2; ZWV = w; } px(x, y, c); ZPL = 0; xmMark(x, y, c); }
+
+// camera-space edge -> near-clipped screen segment, or null
+function xmEdge(a, b){
+    const aIn = a.cz > NEAR, bIn = b.cz > NEAR; if(!aIn && !bIn) return null;
+    let A = a, B = b;
+    if(aIn !== bIn){
+        const t = (NEAR - a.cz) / (b.cz - a.cz);
+        const m = { cx:a.cx + t*(b.cx - a.cx), cy:a.cy + t*(b.cy - a.cy), cz:NEAR };
+        if(aIn) B = m; else A = m;
+    }
+    return [projectCam(A), projectCam(B)];
+}
+
+// a wall's light strings: the gutter and, on the long front walls, both corners
+function xmSegs(cam, f){
+    const out = [], e = xmEdge(cam[f.top[0]], cam[f.top[1]]);
+    if(e){ e.eave = true; out.push(e); }
+    if(f.vt) for(const v of f.vt){ const s = xmEdge(cam[v[0]], cam[v[1]]); if(s) out.push(s); }
+    return out.length ? out : null;
+}
+function xmEave(segs, seed){ for(let i = 0; i < segs.length; i++) xmString(segs[i], seed + i*5); }
+// Icicle lights along a gutter, all warm yellow: a strand of bulbs just under the gutter with drops
+// of uneven length hanging from it. Drop length and spacing follow the perspective (px per world
+// unit at that point), so they shrink into the distance; now and then a flash bulb sparkles.
+function xmString(seg, seed){
+    const A = seg[0], B = seg[1];
+    const dx = B.sx - A.sx, dy = B.sy - A.sy, len = Math.hypot(dx, dy);
+    if(!(len < 4000)) return;
+    const wa = 1 / A.depth, wb = 1 / B.depth, step = xmStep();
+    const n = Math.min(1500, Math.max(1, Math.ceil(len)));                 // walk the gutter pixel by pixel
+    let next = 0, k = 0;
+    for(let i = 0; i <= n; i++){
+        const t = i / n, w = wa + (wb - wa)*t, s = FOCAL * w;                // s = screen px per world unit here
+        const x = Math.round(A.sx + dx*t), y = Math.round(A.sy + dy*t) + 1;
+        if(x < CLIP.x0 || x > CLIP.x1) continue;
+        xmDot(x, y, (i & 1) ? XC.K : XC.BY, w);                             // the strand: bulb, wire, bulb...
+        if(i < next) continue;
+        k++;
+        const hsh = Math.imul(seed*131 + k*977, 2654435761) >>> 0;
+        const L = Math.max(1, Math.min(16, Math.round(s * (0.3 + (hsh % 5) * 0.14))));   // drop length
+        for(let d = 1; d <= L; d++) xmDot(x, y + d, ((L - d) & 1) ? XC.K : XC.BY, w);   // bulbs on a dark wire, bulb at the tip
+        if((hsh >>> 8) % 11 === step % 11 && s > 2){                        // flash bulb
+            const ty = y + L;
+            xmDot(x - 1, ty, XC.BY, w); xmDot(x + 1, ty, XC.BY, w); xmDot(x, ty + 1, XC.BY, w);
+        }
+        next = i + Math.max(2, Math.round(s * 0.5));
+    }
+}
+
+// snow lying on a tree: the canopy's two upper edges in white, so it shows against the black sky
+function xmTreeSnow(it){
+    const s = it.scr; if(!s || s.length < 3) return;
+    let t = 0; for(let i = 1; i < s.length; i++) if(s[i].sy < s[t].sy) t = i;
+    const T = s[t], A = s[(t + s.length - 1) % s.length], B = s[(t + 1) % s.length];
+    const w = 1 / it.depth, h = Math.max(A.sy, B.sy) - T.sy;
+    for(const P of [A, B]){
+        line(T.sx, T.sy, P.sx, P.sy, XC.BW, w, w); ZPL = 0;
+        if(h >= 16){ line(T.sx, T.sy + 1, P.sx, P.sy + 1, XC.BW, w, w); ZPL = 0; }   // thicker on near trees
+    }
+}
+// garlands of lights over a tree's canopy (the tree itself is drawn as normal)
+function xmTreeLights(it){
+    const s = it.scr; if(!s || s.length < 3) return;
+    let y0 = 1e9, y1 = -1e9, tx = 0;
+    for(const p of s){ if(p.sy < y0){ y0 = p.sy; tx = p.sx; } if(p.sy > y1) y1 = p.sy; }
+    const h = y1 - y0, w = 1 / it.depth, step = xmStep(), seed = (it.seed || 0) * 7;
+    if(h < 4){ xmDot(Math.round(tx), Math.round(y0 + h*0.55), XM_TREE_LIGHTS[(seed + step) % 5], w); return; }
+    const bs = h < 26 ? 1 : h < 46 ? 2 : 3;                               // bulb size: bigger on nearer trees
+    const bulb = (x, y, c) => { const o = bs >> 1; for(let v = 0; v < bs; v++) for(let u = 0; u < bs; u++) xmDot(x - o + u, y - o + v, c, w); };
+    const rows = h < 10 ? [0.4, 0.7] : h < 24 ? [0.3, 0.55, 0.8] : bs < 2 ? [0.22, 0.4, 0.58, 0.76] : [0.18, 0.3, 0.42, 0.54, 0.66, 0.78, 0.88];
+    const sp = bs === 1 ? (h < 24 ? 4 : 5) : bs * 4;
+    for(let r = 0; r < rows.length; r++){
+        const y = Math.round(y0 + rows[r]*h);
+        let xa = 1e9, xb = -1e9;
+        for(let i = 0; i < s.length; i++){
+            const a = s[i], b = s[(i + 1) % s.length];
+            if((a.sy <= y && b.sy > y) || (b.sy <= y && a.sy > y)){
+                const x = a.sx + (y - a.sy) / (b.sy - a.sy) * (b.sx - a.sx);
+                if(x < xa) xa = x; if(x > xb) xb = x;
+            }
+        }
+        if(xb < xa) continue;
+        xa += bs; xb -= bs; if(xb < xa){ xa = xb = (xa + xb) / 2; }
+        const n = Math.max(1, Math.floor((xb - xa) / sp));
+        for(let j = 0; j <= n; j++){
+            if((j*7 + r*3 + seed + step) % 5 === 0) continue;               // twinkle
+            const t = j / n;
+            const x = Math.round(xa + (xb - xa)*t), yy = y + (h > 16 ? Math.round(Math.sin(t*Math.PI) * bs) : 0);   // garland sags
+            bulb(x, yy, XM_TREE_LIGHTS[(j + r*2 + seed + step) % 5]);
+        }
+    }
+    if(h >= 10 && (step & 1)){                                           // flashing star on top, sized with the tree
+        const c = XC.BY, x = Math.round(tx), y = Math.round(y0), a = bs;
+        xmDot(x, y, c, w);
+        for(let d = 1; d <= a; d++){ xmDot(x - d, y, c, w); xmDot(x + d, y, c, w); xmDot(x, y - d, c, w); if(d < a) xmDot(x, y + d, c, w); }
+    }
+}
+
+// ── the night sky: stars + the occasional sleigh ──
+const XM_STARS = (() => {
+    let s = 20261225; const rnd = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    const a = []; for(let i = 0; i < 160; i++) a.push({ az:rnd()*360, h:rnd(), tw:rnd() < 0.25, dim:rnd() < 0.35 });
+    return a;
+})();
+function xmSetPx(x, y, c){ if(x < 0 || x >= W || y < 0 || y >= H) return; const i = (y*W + x) << 2; D[i] = c[0]; D[i+1] = c[1]; D[i+2] = c[2]; D[i+3] = 255; }
+function xmSky(x0, y0, x1, hz){
+    XS.box = null;
+    const step = xmStep(), rows = Math.max(1, hz - y0 - 3);
+    for(let i = 0; i < XM_STARS.length; i++){
+        const S = XM_STARS[i], d = ((S.az - CAM.yaw + 540) % 360) - 180;
+        if(d < -70 || d > 70) continue;
+        if(S.tw && ((step + i) % 4) === 0) continue;                      // twinkle
+        const x = Math.round(SCREEN_CX + Math.tan(d*Math.PI/180)*FOCAL);
+        if(x < x0 || x > x1) continue;
+        xmSetPx(x, y0 + 1 + Math.floor(S.h*rows), S.dim ? XC.W : XC.BW);
+    }
+    xmSanta(x0, y0, x1, hz);
+}
+
+// Sprites face right; '.' is see-through.  r/R red, W/w white, Y/y yellow (y = the Spectrum's brown),
+// g green, m magenta, K black, N = Rudolph's nose.  (In the attribute pass each 8x8 cell keeps one ink.)
+const XM_SLEIGH = [
+    "....W.........",
+    ".....rr.......",
+    "....WWW.......",
+    ".mm.WwwK......",
+    "mggmrWWr....YY",
+    "RRRRRRRRRRRRY.",
+    "RYRRYRRYRRYRR.",
+    "..y....y...y.Y",
+    ".YYYYYYYYYYYY.",
+];
+const XM_DEER_A = [
+    ".......W.W",
+    "........W.",
+    ".......yyN",
+    "Wyyyyyyyy.",
+    ".yyyyyyy..",
+    "y.y...y.y.",
+];
+const XM_DEER_B = XM_DEER_A.slice(0, 5).concat([
+    ".yy...yy..",
+]);
+const XM_SPR_W = 40;
+const XS = { next: 0, act: null, box: null };
+function xmSanta(x0, y0, x1, hz){
+    const t = performance.now();
+    if(!XS.next) XS.next = t + XMAS.santaFirst;
+    if(!XS.act){
+        if(t < XS.next) return;
+        const dir = Math.random() < 0.5 ? 1 : -1;
+        XS.act = { t0:t, dir, az0:CAM.yaw - dir*85 };
+    }
+    const A = XS.act, travel = (t - A.t0) / 1000 * XMAS.santaSpeed;
+    if(travel > 170){ XS.act = null; XS.next = t + XMAS.santaGapMin + Math.random()*(XMAS.santaGapMax - XMAS.santaGapMin); return; }
+    const d = ((A.az0 + A.dir*travel - CAM.yaw + 540) % 360) - 180;
+    if(d < -75 || d > 75) return;
+    const cx = Math.round(SCREEN_CX + Math.tan(d*Math.PI/180)*FOCAL);
+    const frame = Math.floor(t / 140) & 1, bob = Math.round(Math.sin(t / 260));
+    const left = cx - (XM_SPR_W >> 1), top = y0 + Math.max(2, Math.floor((hz - y0 - 10) / 3)) + bob;
+    const noseOn = (Math.floor(t / 320) & 1) === 1;
+    const flip = A.dir < 0;
+    const put = (lx, ly, c, light) => {
+        const X = flip ? left + (XM_SPR_W - 1 - lx) : left + lx, Y = top + ly;
+        if(X < x0 || X > x1 || Y < y0 || Y >= hz) return;
+        xmSetPx(X, Y, c); if(light) xmMark(X, Y, c);
+        const B = XS.box || (XS.box = [X, Y, X, Y]);                     // where the sleigh was drawn (for the clash)
+        if(X < B[0]) B[0] = X; if(X > B[2]) B[2] = X; if(Y < B[1]) B[1] = Y; if(Y > B[3]) B[3] = Y;
+    };
+    const blit = (rows, ox, oy, rudolph) => {
+        for(let r = 0; r < rows.length; r++){
+            const s = rows[r];
+            for(let c = 0; c < s.length; c++){
+                const ch = s[c]; let col, light = false;
+                switch(ch){
+                    case '.': continue;
+                    case 'r': col = XC.BR; break;  case 'R': col = XC.R;  break;
+                    case 'W': col = XC.BW; break;  case 'w': col = XC.W;  break;
+                    case 'Y': col = XC.BY; break;  case 'y': col = XC.Y;  break;
+                    case 'g': col = XC.BG; break;  case 'm': col = XC.BM; break;
+                    case 'K': col = XC.K;  break;
+                    case 'N': if(rudolph && noseOn){ col = XC.BR; light = true; } else col = XC.Y; break;   // Rudolph's nose wins its cell
+                    default: continue;
+                }
+                put(ox + c, oy + r, col, light);
+            }
+        }
+    };
+    // magic sparkles trailing behind the sleigh
+    const sk = Math.floor(t / 90);
+    for(let i = 0; i < 7; i++){
+        const h1 = ((sk + i*13) * 2654435761) >>> 0;
+        if(h1 & 1) continue;
+        put(-2 - (h1 >>> 3) % 12, 3 + (h1 >>> 9) % 5, (h1 >>> 15) % 2 ? XC.BY : XC.BW, false);
+    }
+    blit(XM_SLEIGH, 0, 0, false);
+    for(let x = 14; x <= 16; x++) put(x, 5, XC.Y, false);              // harness
+    for(let x = 27; x <= 29; x++) put(x, 5, XC.Y, false);
+    blit(frame ? XM_DEER_B : XM_DEER_A, 17, 2, false);
+    blit(frame ? XM_DEER_A : XM_DEER_B, 30, 2, true);                   // Rudolph leads, out of step
+}
+
+// Is the camera under a tunnel roof? (centreline within the tunnel's width, roof above the eye)
+function xmInTunnel(){
+    if(typeof TUNNELS === 'undefined' || !TUNNELS || !TUNNELS.length) return false;
+    for(const T of TUNNELS){
+        const R = tunnelRing(T); if(!R) continue;
+        const H = T.height || 10, a = Math.max(0, T.from), b = Math.min(R.length - 1, T.to);
+        for(let q = a; q <= b; q++){
+            const s = R[q], dx = s.cx - CAM.x, dz = s.cz - CAM.z, dy = CAM.y - (s.cy || 0);
+            if(dx*dx + dz*dz < 10*10 && dy > -2 && dy < H) return true;
+        }
+    }
+    return false;
+}
+// ── a light snow shower over the play window, drawn OVER 1 (XOR): white on dark, black on snow ──
+const XSN = { f: null, last: 0, yaw: null };
+function xmSnow(FULL){
+    const bx0 = FULL ? FULL_WIN.x0 : 0, by0 = FULL ? FULL_WIN.y0 : 0;
+    const bx1 = FULL ? FULL_WIN.x1 : VIEW_X1, by1 = FULL ? FULL_WIN.y1 : DASHBOARD_Y - 1;
+    const W0 = bx1 - bx0 + 1, H0 = by1 - by0 + 1;
+    const t = performance.now(), dt = XSN.last ? Math.min(0.1, (t - XSN.last) / 1000) : 0; XSN.last = t;
+    if(!XSN.f){ XSN.f = []; for(let i = 0; i < XMAS.flakes; i++) XSN.f.push({ x:Math.random()*W0, y:Math.random()*H0, v:9 + Math.random()*12, ph:Math.random()*6.283, big:Math.random() < 0.2 }); }
+    let dyaw = XSN.yaw === null ? 0 : ((CAM.yaw - XSN.yaw + 540) % 360) - 180; XSN.yaw = CAM.yaw;
+    if(Math.abs(dyaw) > 30) dyaw = 0;                                    // a reset / teleport, not a turn
+    const ppd = FOCAL * Math.PI / 180;                                   // px per degree of turn
+    const spd = SNM.onFoot ? 0 : Math.min(4, Math.abs(CAR.speed || 0));
+    const vpx = SCREEN_CX - bx0, vpy = SCREEN_CY - by0;
+    const sheltered = xmInTunnel();                                      // no snow under a tunnel roof
+    for(const f of XSN.f){
+        const k = f.big ? 1.6 : 1;
+        f.y += f.v*k*dt + (f.y - vpy)*0.35*spd*k*dt;
+        f.x += Math.sin(t/900 + f.ph)*6*k*dt - dyaw*ppd*k + (f.x - vpx)*0.35*spd*k*dt;
+        if(f.y >= H0){ f.y -= H0; f.x = Math.random()*W0; }
+        else if(f.y < 0) f.y += H0;
+        if(f.x < 0 || f.x >= W0){
+            if(spd > 0.05){ f.x = Math.random()*W0; f.y = Math.random()*H0; }
+            else f.x = ((f.x % W0) + W0) % W0;
+        }
+        if(sheltered) continue;                                          // flakes keep moving, just not drawn
+        const X = bx0 + (f.x | 0), Y = by0 + (f.y | 0);
+        const n = f.big ? 2 : 1;
+        for(let yy = 0; yy < n; yy++) for(let xx = 0; xx < n; xx++){
+            const x = X + xx, y = Y + yy;
+            if(x < bx0 || x > bx1 || y < by0 || y > by1) continue;
+            const i = (y*W + x) << 2, lit = D[i] + D[i+1] + D[i+2] >= 0x180;
+            xmSetPx(x, y, lit ? XC.K : XC.BW);
+        }
+    }
+}
+
+// ── strict palette ──
+// xmQuant: rgb -> Spectrum colour code (0-15), or a negative value for a grey (an ordered
+// black/white dither with that many 16ths of white), the way a Spectrum shows grey.
+const XM_PAL = [XC.K, XC.B, XC.R, XC.M, XC.G, XC.C, XC.Y, XC.W, XC.BB, XC.BR, XC.BM, XC.BG, XC.BC, XC.BY, XC.BW];
+const XM_QC = new Map();
+function xmQuant(r, g, b){
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    if(mx - mn < 28){                                                   // neutral
+        if(mx <= 24) return 0;
+        if(mx >= 0xB8) return 7 | 8;                                    // light grey / white -> BRIGHT white
+        return -(1 + Math.min(16, Math.round(mx / 255 * 16)));
+    }
+    let best = 0, bd = 1e9;
+    for(const p of XM_PAL){
+        const d = (r - p[0])*(r - p[0]) + (g - p[1])*(g - p[1]) + (b - p[2])*(b - p[2]);
+        if(d < bd){ bd = d; best = xmCode(p); }
+    }
+    return best;
+}
+function xmQ(Dd, i){
+    const k = (Dd[i] << 16) | (Dd[i+1] << 8) | Dd[i+2];
+    let v = XM_QC.get(k);
+    if(v === undefined){ v = xmQuant(Dd[i], Dd[i+1], Dd[i+2]); XM_QC.set(k, v); }
+    return v;
+}
+function xmPaletteData(Dd, w, h){                                       // no attributes: just snap to the palette
+    for(let y = 0; y < h; y++) for(let x = 0; x < w; x++){
+        const i = (y*w + x) << 2; let v = xmQ(Dd, i);
+        if(v < 0) v = BAYER4[((y & 3) << 2) | (x & 3)] < (-v - 1) ? 15 : 0;
+        const c = XM_RGB[v]; Dd[i] = c[0]; Dd[i+1] = c[1]; Dd[i+2] = c[2]; Dd[i+3] = 255;
+    }
+}
+function xmPalette(){ xmPaletteData(D, W, H); }
+function xmPaletteCtx(c2, w, h){ try { const im = c2.getImageData(0, 0, w, h); xmPaletteData(im.data, w, h); c2.putImageData(im, 0, 0); } catch(e){} }
+
+// ── 48K attribute clash over a window (x0,y0 on an 8-pixel grid) ──
+// Per 8x8 cell: INK = the commonest light colour in it, else the commonest colour that is
+// neither the paper nor black/white, else the second commonest; PAPER = the commonest of
+// the rest. Every pixel that isn't paper becomes ink - so a red light turns the black
+// dither, kerb or outline in its cell red. BRIGHT is one bit for the whole cell.
+const XQ = new Uint8Array(64), XCN = new Uint16Array(8), XBR = new Uint16Array(8), XLN = new Uint16Array(8), XLBR = new Uint16Array(8);
+function xmClash(x0, y0, x1, y1){
+    for(let cy = y0; cy + 7 <= y1; cy += 8) for(let cx = x0; cx + 7 <= x1; cx += 8){
+        XCN.fill(0); XBR.fill(0); XLN.fill(0); XLBR.fill(0);
+        let lights = 0;
+        for(let j = 0; j < 64; j++){
+            const x = cx + (j & 7), y = cy + (j >> 3), p = y*W + x, L = XLB[p];
+            let v;
+            if(L){ v = L - 1; XLN[v & 7]++; if(v & 8) XLBR[v & 7]++; lights++; XQ[j] = v | 16; continue; }
+            v = xmQ(D, p << 2);
+            if(v < 0) v = BAYER4[((y & 3) << 2) | (x & 3)] < (-v - 1) ? 15 : 0;
+            XCN[v & 7]++; if(v & 8) XBR[v & 7]++;
+            XQ[j] = v;
+        }
+        let ink = -1, paper = -1;
+        const top = (cnt, skip) => { let b = -1; for(let c = 0; c < 8; c++) if(c !== skip && cnt[c] > 0 && (b < 0 || cnt[c] > cnt[b])) b = c; return b; };
+        if(lights){
+            ink = top(XLN, -1);
+            paper = top(XCN, ink); if(paper < 0) paper = ink;
+        } else {
+            paper = top(XCN, -1);
+            for(let c = 1; c < 7; c++) if(c !== paper && XCN[c] > 0 && (ink < 0 || XCN[c] > XCN[ink])) ink = c;
+            if(ink < 0) ink = top(XCN, paper);
+            if(ink < 0) ink = paper;
+        }
+        // BRIGHT: from the ink if it has colour, else from the paper
+        const src = ink !== 0 ? ink : paper;
+        const bright = (lights && XLN[src]) ? (XLBR[src]*2 >= XLN[src]) : (XBR[src]*2 >= XCN[src]);
+        const b8 = bright ? 8 : 0;
+        const I = XM_RGB[ink | b8], P = XM_RGB[paper | b8];
+        for(let j = 0; j < 64; j++){
+            const q = XQ[j], c = (!(q & 16) && (q & 7) === paper) ? P : I;
+            const i = ((cy + (j >> 3))*W + cx + (j & 7)) << 2;
+            D[i] = c[0]; D[i+1] = c[1]; D[i+2] = c[2]; D[i+3] = 255;
+        }
+    }
+}
+// Soft clash for the lights: each light tints the INK (dark) pixels of its own small NxN
+// block in the normal (non-BRIGHT) shade of its colour; white paper is left alone.
+function xmGlow(x0, y0, x1, y1, N){
+    if(!(N > 1)) return;
+    const msk = ~(N - 1);
+    for(let y = y0; y <= y1; y++) for(let x = x0; x <= x1; x++){
+        const L = XLB[y*W + x]; if(!L) continue;
+        const c = XM_RGB[(L - 1) & 7];
+        const bx = x & msk, by = y & msk;
+        for(let yy = by; yy < by + N && yy <= y1; yy++) for(let xx = bx; xx < bx + N && xx <= x1; xx++){
+            if(xx < x0 || yy < y0) continue;
+            const p = yy*W + xx; if(XLB[p]) continue;
+            const i = p << 2; let v = xmQ(D, i);
+            if(v < 0) v = BAYER4[((yy & 3) << 2) | (xx & 3)] < (-v - 1) ? 15 : 0;
+            if(v === 0){ D[i] = c[0]; D[i+1] = c[1]; D[i+2] = c[2]; }
+        }
+    }
+}
+// end of frame: soft glow for the lights, full 8x8 clash where Father Christmas is, then
+// snap everything to the palette
+function xmFinish(FULL){
+    const wx0 = FULL ? FULL_WIN.x0 : 0, wy0 = FULL ? FULL_WIN.y0 : 0;
+    const wx1 = FULL ? FULL_WIN.x1 : VIEW_X1, wy1 = FULL ? FULL_WIN.y1 : DASHBOARD_Y - 1;
+    xmGlow(wx0, wy0, wx1, wy1, XMAS.glow);
+    if(XMAS.clash && XS.box){
+        const B = XS.box;
+        const cx0 = Math.max(wx0, wx0 + Math.floor((B[0] - wx0) / 8) * 8), cy0 = Math.max(wy0, wy0 + Math.floor((B[1] - wy0) / 8) * 8);
+        const cx1 = Math.min(wx1, wx0 + Math.floor((B[2] - wx0) / 8) * 8 + 7), cy1 = Math.min(wy1, wy0 + Math.floor((B[3] - wy0) / 8) * 8 + 7);
+        xmClash(cx0, cy0, cx1, cy1);
+    }
+    xmPalette();
+}
+
+// ── title screen: banner + snowfall ──
+const XTS = { f: null };
+function xmTitleDraw(){
+    ttctx.drawImage(TITLE.img, 0, 0);
+    if(!XTS.f){ XTS.f = []; for(let i = 0; i < 70; i++) XTS.f.push({ x:Math.random()*256, y:Math.random()*192, v:0.6 + Math.random()*0.9, ph:Math.random()*6.283 }); }
+    const t = performance.now();
+    ttctx.fillStyle = '#FFFFFF';
+    for(const f of XTS.f){
+        f.y += f.v; f.x += Math.sin(t/700 + f.ph)*0.4;
+        if(f.y >= 176){ f.y = 0; f.x = Math.random()*256; }
+        f.x = (f.x + 256) % 256;
+        const n = f.v > 1.2 ? 2 : 1;
+        ttctx.fillRect(f.x | 0, f.y | 0, n, n);
+    }
+    zxCentre(ttctx, '* MERRY CHRISTMAS *', 22, (Math.floor(t / 320) & 1) ? '#FFFF00' : '#FFFFFF', '#FF0000');
+}
 
 // ─── Screen / projection constants ──────────────────────────────────────────
 let FOCAL       = 55.4256;     // focal length in px (let: the on-foot full screen, S32, scales it per frame)
@@ -3723,7 +4146,9 @@ const mapCanvas = document.getElementById('map');
 const mctx = mapCanvas.getContext('2d');
 const MAP_W = 300, MAP_H = 252;
 
-function drawMinimap(){
+let XM_MM = 0;   // XMAS: the side map is redrawn (and palette-snapped) every 4th frame
+function drawMinimap(){ if(XMAS.on && ((XM_MM = (XM_MM + 1) & 3) !== 1)) return; drawMinimap0(); if(XMAS.on) xmPaletteCtx(mctx, MAP_W, MAP_H); }
+function drawMinimap0(){
     const b = MAP_BOUNDS;
     const wW = b.maxx - b.minx, wH = b.maxz - b.minz;
     const pad = 26;                              // inner padding for labels
@@ -4371,10 +4796,10 @@ function drawBuildings(){
         if(near > FAR) continue;
         const keep = sceneryKeep(near);
         const defs=[
-            {idx:[0,1,2,3], col:tpl.front, wall:true},   // wall A
-            {idx:[4,5,6,7], col:tpl.front, wall:true},   // wall B
-            {idx:[1,5,6,2], col:tpl.side , wall:true},   // side
-            {idx:[4,0,3,7], col:tpl.side , wall:true},   // side
+            {idx:[0,1,2,3], col:tpl.front, wall:true, top:[2,3]},   // wall A  (XMAS: top = the gutter light string)
+            {idx:[4,5,6,7], col:tpl.front, wall:true, top:[6,7]},   // wall B
+            {idx:[1,5,6,2], col:tpl.side , wall:true, top:[6,2]},   // side
+            {idx:[4,0,3,7], col:tpl.side , wall:true, top:[3,7]},   // side
             {idx:[3,2,6,7], col:tpl.front, wall:false},  // roof (always visible)
         ];
         // Precompute box centre in world space for the facing test below.
@@ -4407,7 +4832,7 @@ function drawBuildings(){
             if(clipped.length<3) continue;
             const scr=projectPolyToScreen(clipped);
             let far=0; for(const c of clipped) if(c.cz>far) far=c.cz;
-            faces.push({scr, col:f.col, depth:far, keep});
+            faces.push({scr, col:f.col, depth:far, keep, xl:(XMAS.on && f.wall) ? xmSegs(cam, f) : null, xs:bi*3 + (f.top ? f.top[0] : 0)});
         }
         // churches get a simple pyramidal spire centred on the roof
         if(tpl.spire){
@@ -4450,6 +4875,7 @@ function drawBuildings(){
             // thinning, so distant buildings melt rather than showing a crisp rim
             if(f.keep>0.75) strokePoly(f.scr, COL.BLACK);
         }
+        if(f.xl && f.keep>0.35) xmEave(f.xl, f.xs);   // XMAS
     }
 }
 
@@ -4537,12 +4963,13 @@ function propQueue(faces){      // S44h: hedges/trees, queued into drawBuildings
             ];
             cl=clipNear(canopy);
             if(cl.length>=3){ let far=0,near=Infinity; for(const cc of cl){ if(cc.cz>far)far=cc.cz; if(cc.cz<near)near=cc.cz; }
-                if(near<=FAR) items.push({scr:projectPolyToScreen(cl), kind:'tree', depth:far, keep:sceneryKeep(near)}); }
+                if(near<=FAR) items.push({scr:projectPolyToScreen(cl), kind:'tree', depth:far, keep:sceneryKeep(near), seed:idxs[q]}); }
         }
     }
     for(const it of items) faces.push({scr:it.scr, depth:it.depth, keep:it.keep, prop:it});
 }
-function paintProp(it){
+function paintProp(it){ paintProp0(it); if(XMAS.on && it.kind==='tree'){ if(it.keep>0.6) xmTreeSnow(it); if(it.keep>0.3) xmTreeLights(it); } }   // XMAS
+function paintProp0(it){
         const k=it.keep;
         if(it.kind==='signboard'){ fillPoly(it.scr, COL.WHITE); if(k>0.5) strokePoly(it.scr, COL.BLACK); return; }   // S46i
         if(it.kind==='signarrow'){ fillPolyFade(it.scr, COL.BLACK, COL.WHITE, Math.min(1,k)); return; }
@@ -5838,9 +6265,11 @@ function roadChunks(road){      // S46a: bounding circle per 16 sections (points
 }
 function render(){
     clear();
+    if(XMAS.on) XLB.fill(0);   // XMAS: this frame's light pixels
     resetClip();
     if(SNM.active && SNM.screen){         // Saturday Night: a static screen instead of the world
         snmRenderScreen();
+        if(XMAS.on) xmPalette();
         ctx.putImageData(img,0,0);
         drawMinimap();
         return;
@@ -5851,12 +6280,12 @@ function render(){
         const F=FULL_WIN, hz = Math.round(PROJ_FULL.cy - 26*FULL_K);   // same sky line
         for(let y=0;y<H;y++) for(let x=0;x<W;x++){
             const inWin = x>=F.x0 && x<=F.x1 && y>=F.y0 && y<=F.y1;
-            px(x,y, !inWin ? COL.BLACK : y<hz ? COL.BLUE : COL.WHITE);
+            px(x,y, !inWin ? COL.BLACK : y<hz ? (XMAS.on ? XC.K : COL.BLUE) : COL.WHITE);
         }
     } else {
     // ── Original four-band fixed layout (from road_vp22.html) ──
     // blue sky above the play window
-    fillRectFast(0,0,VIEW_X1,HORIZON_Y-1,COL.BLUE);                 // S46a: direct fills
+    fillRectFast(0,0,VIEW_X1,HORIZON_Y-1,XMAS.on ? XC.K : COL.BLUE);                 // S46a: direct fills
     // white ground band inside the play window
     fillRectFast(0,HORIZON_Y,VIEW_X1,DASHBOARD_Y-1,COL.WHITE);
     // cyan right-hand column (reserved for dashboard/instruments)
@@ -5864,6 +6293,7 @@ function render(){
     // cyan bottom band
     fillRectFast(0,DASHBOARD_Y,W-1,H-1,COL.CYAN);
     }
+    if(XMAS.on){ if(FULL) xmSky(FULL_WIN.x0, FULL_WIN.y0, FULL_WIN.x1, Math.round(PROJ_FULL.cy - 26*FULL_K)); else xmSky(0, 0, VIEW_X1, HORIZON_Y); }   // XMAS
 
     // Confine world drawing to the play COLUMN (left of the dashboard) and above
     // the dashboard — but let it rise to the TOP of the screen, not stop at the
@@ -6182,6 +6612,7 @@ function render(){
     if(!SNM.onFoot) drawCar();   // on foot, the car is a world sprite instead
     if(!SNM.onFoot) turboFx();   // S35: turbo wheel-spin grit around the car
     resetClip();
+    if(XMAS.on) xmSnow(FULL);     // XMAS
 
     if(FULL){                     // re-black the border: some sprites ignore the clip
         const F=FULL_WIN;
@@ -6191,6 +6622,7 @@ function render(){
     setProj(PROJ_STD);            // anything outside render() sees the normal projection
     if(SNM.active) snmDrawHUD();
 
+    if(XMAS.on) xmFinish(FULL);   // XMAS: 8x8 attribute clash + strict Spectrum palette
     ctx.putImageData(img,0,0);
     learnerOverlay();   // S47g: lesson tips over the play window
 
@@ -6520,7 +6952,7 @@ let CS = { phase:'idle', typed:['','','',''], line:0, ch:0,
 let CS_PADSEL = null;
 let csTimer = null, csRAF = null;
 
-const GAME_VERSION = 'V1.1';   // S47o: shown bottom-left of SELECT A CITY
+const GAME_VERSION = 'V1.2';   // S47o: shown bottom-left of SELECT A CITY
 function csVersion(){            // 3x5 font, black ink on the green paper
     cctx.fillStyle = CS_BLACK;
     let x = 2; const y = 192 - 7;
@@ -13113,13 +13545,14 @@ function titleReveal(){
 
 // Blinking "PRESS ANY KEY" on the bottom row, drawn with the ROM-font helper.
 function titlePrompt(){
-    let on = true;
+    let on = true, last = 0;
     const blink = () => {
         if(TITLE.done) return;
-        ttctx.drawImage(TITLE.img, 0, 184, 256, 8, 0, 184, 256, 8);
+        const now = performance.now();
+        if(XMAS.on) xmTitleDraw(); else ttctx.drawImage(TITLE.img, 0, 184, 256, 8, 0, 184, 256, 8);
         if(on) zxCentre(ttctx, IS_TOUCH ? 'TAP TO START' : 'PRESS ENTER TO START', 23, '#FFFFFF', '#000000');
-        on = !on;
-        TITLE.raf = setTimeout(blink, 500);
+        if(!XMAS.on || now - last >= 500){ on = !on; last = now; }
+        TITLE.raf = setTimeout(blink, XMAS.on ? 70 : 500);
     };
     blink();
 }
